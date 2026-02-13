@@ -47,9 +47,26 @@
         }
     }
 
+    .task-status-container{
+        width: 100%;
+        min-width: 0;
+        margin-right: 8px;
+    }
+
+    .task-progress.progress{
+        margin-top: 4px;
+        margin-bottom: 0;
+        height: 14px;
+
+        .progress-bar{
+            line-height: 14px;
+            font-size: 11px;
+        }
+    }
+
     .actions{
         display: flex;
-        align-items: center;
+        align-items: flex-start;
         padding-right: 2px;
         justify-content: flex-end;
     }

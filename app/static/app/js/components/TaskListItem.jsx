@@ -773,6 +773,17 @@ class TaskListItem extends React.Component {
     
     let statusIcon = statusCodes.icon(task.status);
 
+    let taskProgressPercentage = null;
+    const clampProgress = (value) => Math.max(0, Math.min(100, value));
+
+    if (task.pending_action === pendingActions.RESIZE){
+      taskProgressPercentage = clampProgress((task.resize_progress || 0) * 100);
+    }else if (task.status === null){
+      taskProgressPercentage = clampProgress((task.upload_progress || 0) * 100);
+    }else if (task.status === statusCodes.RUNNING){
+      taskProgressPercentage = clampProgress((task.running_progress || 0) * 100);
+    }
+
     // @param type {String} one of: ['neutral', 'done', 'error']
     const getStatusLabel = (text, type = 'neutral', progress = 100) => {
       let color = 'rgba(255, 255, 255, 0.0)';
@@ -801,11 +812,11 @@ class TaskListItem extends React.Component {
       let type = 'done';
 
       if (task.pending_action === pendingActions.RESIZE){
-          progress = task.resize_progress * 100;
+          progress = taskProgressPercentage || 0;
       }else if (task.status === null){
-          progress = task.upload_progress * 100;
+          progress = taskProgressPercentage || 0;
       }else if (task.status === statusCodes.RUNNING){
-          progress = task.running_progress * 100;
+          progress = taskProgressPercentage || 0;
       }else if (task.status === statusCodes.FAILED){
           type = 'error';
       }else if (task.status !== statusCodes.COMPLETED){
@@ -865,6 +876,9 @@ class TaskListItem extends React.Component {
     let taskActionsIcon = "fa-ellipsis-h";
     if (actionLoading) taskActionsIcon = "fa-circle-notch fa-spin fa-fw";
     const userTags = Tags.userTags(task.tags);
+    const hasTaskProgressBar = taskProgressPercentage !== null;
+    const formattedTaskProgress = hasTaskProgressBar ? taskProgressPercentage.toFixed(2) : "";
+    const taskProgressClass = hasTaskProgressBar && taskProgressPercentage < 100 ? "active" : "";
 
     return (
       <div className="task-list-item">
@@ -890,9 +904,18 @@ class TaskListItem extends React.Component {
             <i className="far fa-clock"></i> {this.hoursMinutesSecs(this.state.time)}
           </div>
           <div className="col-xs-5 col-sm-6 col-md-4 col-lg-3 actions">
-            {showEditLink ?
-              <a href="javascript:void(0);" onClick={this.startEditing}>{statusLabel}</a>
-              : statusLabel}
+            <div className="task-status-container">
+              {showEditLink ?
+                <a href="javascript:void(0);" onClick={this.startEditing}>{statusLabel}</a>
+                : statusLabel}
+              {hasTaskProgressBar ?
+                <div className="task-progress progress">
+                  <div className={"progress-bar progress-bar-success " + taskProgressClass} style={{width: formattedTaskProgress + '%'}}>
+                    {formattedTaskProgress}%
+                  </div>
+                </div>
+              : ""}
+            </div>
             {taskActions.length > 0 ? 
                 <div className="btn-group">
                 <button disabled={disabled || actionLoading} className="btn task-actions btn-secondary btn-xs dropdown-toggle" type="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
