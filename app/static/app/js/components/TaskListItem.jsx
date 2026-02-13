@@ -524,15 +524,24 @@ class TaskListItem extends React.Component {
         });
       };
 
-      if (showAssetButtons){
-        if (task.available_assets.indexOf("orthophoto.tif") !== -1 || task.available_assets.indexOf("dsm.tif") !== -1){
-          addActionButton(" " + _("Map"), "btn-primary", "fa fa-globe fa-fw", () => {
-            location.href = `/map/project/${task.project}/task/${task.id}/`;
-          });
-        }else{
-          showOrthophotoMissingWarning = task.available_assets.indexOf("orthophoto.tif") === -1;
-        }
+      const hasPhotoMap = task.available_assets.indexOf("shots.geojson") !== -1;
+      const hasProcessedMap = task.available_assets.indexOf("orthophoto.tif") !== -1 || task.available_assets.indexOf("dsm.tif") !== -1;
 
+      if (hasPhotoMap){
+        addActionButton(" " + _("Photo Map"), "btn-primary", "fa fa-camera fa-fw", () => {
+          location.href = `/map/project/${task.project}/task/${task.id}/?mode=photos`;
+        });
+      }
+
+      if (showAssetButtons && hasProcessedMap){
+        addActionButton(" " + _("Processed Map"), "btn-primary", "fa fa-globe fa-fw", () => {
+          location.href = `/map/project/${task.project}/task/${task.id}/?mode=processed`;
+        });
+      }else if (showAssetButtons){
+        showOrthophotoMissingWarning = task.available_assets.indexOf("orthophoto.tif") === -1;
+      }
+
+      if (showAssetButtons){
         if (task.available_assets.indexOf("georeferenced_model.laz") !== -1 || 
             task.available_assets.indexOf("textured_model.glb") !== -1 ||
             task.available_assets.indexOf("textured_model.zip") !== -1){

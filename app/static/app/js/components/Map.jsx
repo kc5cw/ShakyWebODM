@@ -39,6 +39,8 @@ class Map extends React.Component {
   static defaultProps = {
     showBackground: false,
     mapType: "orthophoto",
+    mapItems: [],
+    mode: "processed",
     public: false,
     publicEdit: false,
     shareButtons: true,
@@ -49,7 +51,9 @@ class Map extends React.Component {
   static propTypes = {
     showBackground: PropTypes.bool,
     tiles: PropTypes.array.isRequired,
+    mapItems: PropTypes.array,
     mapType: PropTypes.oneOf(['orthophoto', 'plant', 'dsm', 'dtm']),
+    mode: PropTypes.oneOf(['processed', 'photos']),
     public: PropTypes.bool,
     publicEdit: PropTypes.bool,
     shareButtons: PropTypes.bool,
@@ -88,10 +92,166 @@ class Map extends React.Component {
 
   countTasks = () => {
     let tasks = {};
+    this.props.mapItems.forEach(mapItem => {
+      if (mapItem.meta && mapItem.meta.task && mapItem.meta.task.id){
+        tasks[mapItem.meta.task.id] = true;
+      }
+    });
     this.props.tiles.forEach(tile => {
         tasks[tile.meta.task.id] = true;
     });
     return Object.keys(tasks).length;
+  }
+
+  collectTaskMetas = () => {
+    const tasks = {};
+
+    this.props.mapItems.forEach(mapItem => {
+      if (mapItem.meta && mapItem.meta.task && mapItem.meta.task.id){
+        tasks[mapItem.meta.task.id] = mapItem.meta.task;
+      }
+    });
+
+    this.props.tiles.forEach(tile => {
+      if (tile.meta && tile.meta.task && tile.meta.task.id){
+        tasks[tile.meta.task.id] = tile.meta.task;
+      }
+    });
+
+    return Object.values(tasks);
+  }
+
+  addTaskOverlays = (task, zIndexGroup = 1) => {
+    if (!task) return;
+
+    if (task.camera_shots && !this.addedCameraShots[task.id]){
+      var camIcon = L.icon({
+        iconUrl: "/static/app/js/icons/marker-camera.png",
+        iconSize: [41, 46],
+        iconAnchor: [17, 46],
+      });
+
+      const shotsLayer = new L.MarkersCanvas();
+
+      shotsLayer.lazyLoad = (cb) => {
+        $.getJSON(task.camera_shots)
+          .done((shots) => {
+            if (shots.type === 'FeatureCollection'){
+              let markers = [];
+
+              shots.features.forEach(s => {
+                let marker = L.marker(
+                  [s.geometry.coordinates[1], s.geometry.coordinates[0]],
+                  { icon: camIcon }
+                );
+                markers.push(marker);
+
+                if (s.properties && s.properties.filename){
+                  let root = null;
+                  const lazyrender = () => {
+                      if (!root) root = document.createElement("div");
+                      ReactDOM.render(<ImagePopup task={task} feature={s}/>, root);
+                      return root;
+                  }
+
+                  marker.bindPopup(L.popup(
+                      {
+                          lazyrender,
+                          maxHeight: 450,
+                          minWidth: 320
+                      }));
+                }
+              });
+
+              shotsLayer.addMarkers(markers, this.map);
+            }
+            cb();
+          }).fail(() => {
+            cb(new Error("Cannot load camera shots"))
+          });
+      };
+      shotsLayer[Symbol.for("meta")] = {
+        name: _("Cameras"),
+        icon: "fa fa-camera fa-fw",
+        zIndexGroup
+      };
+      if (this.taskCount > 1){
+        shotsLayer[Symbol.for("meta")].group = {id: task.id, name: task.name};
+      }
+
+      this.setState(update(this.state, {
+          overlays: {$push: [shotsLayer]}
+      }));
+
+      this.addedCameraShots[task.id] = true;
+    }
+
+    if (task.ground_control_points && !this.addedGroundControlPoints){
+      const gcpIcon = L.icon({
+        iconUrl: "/static/app/js/icons/marker-gcp.png",
+        iconSize: [41, 46],
+        iconAnchor: [17, 46],
+      });
+      const cpIcon = L.icon({
+        iconUrl: "/static/app/js/icons/marker-cp.png",
+        iconSize: [41, 46],
+        iconAnchor: [17, 46],
+      });
+
+      const gcpLayer = new L.MarkersCanvas();
+      gcpLayer.lazyLoad = (cb) => {
+        $.getJSON(task.ground_control_points)
+          .done((gcps) => {
+            if (gcps.type === 'FeatureCollection'){
+              let markers = [];
+
+              gcps.features.forEach(gcp => {
+                let icon = gcpIcon;
+                if (gcp.properties && typeof gcp.properties.id === "string" && gcp.properties.id.startsWith("CHK-")) icon = cpIcon;
+
+                let marker = L.marker(
+                  [gcp.geometry.coordinates[1], gcp.geometry.coordinates[0]],
+                  { icon }
+                );
+                markers.push(marker);
+
+                if (gcp.properties && gcp.properties.observations){
+                  let root = null;
+                  const lazyrender = () => {
+                        if (!root) root = document.createElement("div");
+                        ReactDOM.render(<GCPPopup task={task} feature={gcp}/>, root);
+                        return root;
+                  }
+
+                  marker.bindPopup(L.popup(
+                      {
+                          lazyrender,
+                          maxHeight: 450,
+                          minWidth: 320
+                      }));
+                }
+              });
+
+              gcpLayer.addMarkers(markers, this.map);
+            }
+            cb();
+          }).fail(() => {
+            cb(new Error("Cannot load GCP"))
+          });
+      };
+
+      gcpLayer[Symbol.for("meta")] = {
+        name: _("Ground Control"),
+        icon: "fa fa-map-pin fa-fw",
+        zIndexGroup
+      };
+
+      this.setState(update(this.state, {
+          overlays: {$push: [gcpLayer]}
+      }));
+
+      this.addedGroundControlPoints = true;
+    }
   }
 
   updateOpacity = (evt) => {
@@ -186,6 +346,7 @@ class Map extends React.Component {
     this.taskCount = this.countTasks();
 
     const { tiles } = this.props,
+          tilesToLoad = this.props.mode === "photos" ? [] : tiles,
           layerId = layer => {
             const meta = layer[Symbol.for("meta")];
             return meta.task.project + "_" + meta.task.id;
@@ -208,11 +369,11 @@ class Map extends React.Component {
       // Set a zIndexGroup
       this.zIndexGroupMap = {};
       let zIdx = 1;
-      for (let i = tiles.length - 1; i >= 0; i--){
-        if (!tiles[i].zIndexGroup){
-          const taskId = tiles[i].meta.task.id;
+      for (let i = tilesToLoad.length - 1; i >= 0; i--){
+        if (!tilesToLoad[i].zIndexGroup){
+          const taskId = tilesToLoad[i].meta.task.id;
           if (!this.zIndexGroupMap[taskId]) this.zIndexGroupMap[taskId] = zIdx++;
-          tiles[i].zIndexGroup = this.zIndexGroupMap[taskId];
+          tilesToLoad[i].zIndexGroup = this.zIndexGroupMap[taskId];
         }
       }
 
@@ -220,15 +381,15 @@ class Map extends React.Component {
       // This gives us an idea of overlap between tasks
       // so that we can decide to show them in project map view
       this.ious = {};
-      for (let i = tiles.length - 1; i >= 0; i--){
-        const taskId = tiles[i].meta.task.id;
+      for (let i = tilesToLoad.length - 1; i >= 0; i--){
+        const taskId = tilesToLoad[i].meta.task.id;
         if (this.ious[taskId] === undefined){
           for (let j = i - 1; j >= 0; j--){
-            const tId = tiles[j].meta.task.id;
+            const tId = tilesToLoad[j].meta.task.id;
             if (tId === taskId) continue;
-            if (!tiles[i].meta.task.extent || !tiles[j].meta.task.extent) continue;
+            if (!tilesToLoad[i].meta.task.extent || !tilesToLoad[j].meta.task.extent) continue;
             
-            const iou = this.computeIOU(tiles[i].meta.task.extent, tiles[j].meta.task.extent);
+            const iou = this.computeIOU(tilesToLoad[i].meta.task.extent, tilesToLoad[j].meta.task.extent);
             if (this.ious[taskId] === undefined){
               this.ious[taskId] = iou;
             }else{
@@ -237,9 +398,11 @@ class Map extends React.Component {
           }
         }
       }
-      this.ious[tiles[0].meta.task.id] = 0; // First task is always visible
+      if (tilesToLoad.length > 0){
+        this.ious[tilesToLoad[0].meta.task.id] = 0; // First task is always visible
+      }
 
-      async.each(tiles, (tile, done) => {
+      async.each(tilesToLoad, (tile, done) => {
         const { url, type, zIndexGroup } = tile;
         const meta = Utils.clone(tile.meta);
 
@@ -455,148 +618,19 @@ class Map extends React.Component {
             mapBounds.extend(bounds);
             this.mapBounds = mapBounds;
 
-            // Add camera shots layer if available
-            if (meta.task && meta.task.camera_shots && !this.addedCameraShots[meta.task.id]){
-                var camIcon = L.icon({
-                  iconUrl: "/static/app/js/icons/marker-camera.png",
-                  iconSize: [41, 46],
-                  iconAnchor: [17, 46],
-                });
-                
-                const shotsLayer = new L.MarkersCanvas();
-                
-                shotsLayer.lazyLoad = (cb) => {
-                  $.getJSON(meta.task.camera_shots)
-                    .done((shots) => {
-                      if (shots.type === 'FeatureCollection'){
-                        let markers = [];
-  
-                        shots.features.forEach(s => {
-                          let marker = L.marker(
-                            [s.geometry.coordinates[1], s.geometry.coordinates[0]],
-                            { icon: camIcon }
-                          );
-                          markers.push(marker);
-  
-                          if (s.properties && s.properties.filename){
-                            let root = null;
-                            const lazyrender = () => {
-                                if (!root) root = document.createElement("div");
-                                ReactDOM.render(<ImagePopup task={meta.task} feature={s}/>, root);
-                                return root;
-                            }
-  
-                            marker.bindPopup(L.popup(
-                                {
-                                    lazyrender,
-                                    maxHeight: 450,
-                                    minWidth: 320
-                                }));
-                          }
-                        });
-  
-                        shotsLayer.addMarkers(markers, this.map);
-                      }
-                      cb();
-                    }).fail(() => {
-                      cb(new Error("Cannot load camera shots"))
-                    });
-                };
-                shotsLayer[Symbol.for("meta")] = {
-                  name: _("Cameras"), 
-                  icon: "fa fa-camera fa-fw",
-                  zIndexGroup
-                };
-                if (this.taskCount > 1){
-                  // Assign to a group
-                  shotsLayer[Symbol.for("meta")].group = {id: meta.task.id, name: meta.task.name};
-                }
-
-                this.setState(update(this.state, {
-                    overlays: {$push: [shotsLayer]}
-                }));
-
-                this.addedCameraShots[meta.task.id] = true;
-            }
-
-            // Add ground control points layer if available
-            if (meta.task && meta.task.ground_control_points && !this.addedGroundControlPoints){
-                const gcpIcon = L.icon({
-                  iconUrl: "/static/app/js/icons/marker-gcp.png",
-                  iconSize: [41, 46],
-                  iconAnchor: [17, 46],
-                });
-                const cpIcon = L.icon({
-                  iconUrl: "/static/app/js/icons/marker-cp.png",
-                  iconSize: [41, 46],
-                  iconAnchor: [17, 46],
-                });
-                
-                const gcpLayer = new L.MarkersCanvas();
-                gcpLayer.lazyLoad = (cb) => {
-                  $.getJSON(meta.task.ground_control_points)
-                    .done((gcps) => {
-                      if (gcps.type === 'FeatureCollection'){
-                        let markers = [];
-  
-                        gcps.features.forEach(gcp => {
-                          let icon = gcpIcon;
-                          if (gcp.properties && typeof gcp.properties.id === "string" && gcp.properties.id.startsWith("CHK-")) icon = cpIcon;
-  
-                          let marker = L.marker(
-                            [gcp.geometry.coordinates[1], gcp.geometry.coordinates[0]],
-                            { icon }
-                          );
-                          markers.push(marker);
-  
-                          if (gcp.properties && gcp.properties.observations){
-                            let root = null;
-                            const lazyrender = () => {
-                                  if (!root) root = document.createElement("div");
-                                  ReactDOM.render(<GCPPopup task={meta.task} feature={gcp}/>, root);
-                                  return root;
-                            }
-  
-                            marker.bindPopup(L.popup(
-                                {
-                                    lazyrender,
-                                    maxHeight: 450,
-                                    minWidth: 320
-                                }));
-                          }
-                        });
-  
-                        gcpLayer.addMarkers(markers, this.map);
-                      }
-
-                      cb();
-                    }).fail(() => {
-                      cb(new Error("Cannot load GCPs"))
-                    });
-                };
-                gcpLayer[Symbol.for("meta")] = {
-                  name: _("Ground Control Points"), 
-                  icon: "far fa-dot-circle fa-fw",
-                  zIndexGroup
-                };
-                
-                if (this.taskCount > 1){
-                  // Assign to a group
-                  gcpLayer[Symbol.for("meta")].group = {id: meta.task.id, name: meta.task.name};
-                }
-
-                this.setState(update(this.state, {
-                    overlays: {$push: [gcpLayer]}
-                }));
-
-                this.addedGroundControlPoints = true;
-            }
+            this.addTaskOverlays(meta.task, zIndexGroup);
 
             done();
           })
           .fail((_, __, err) => done(err))
         );
       }, err => {
+        let zIdx = Object.keys(this.zIndexGroupMap).length + 1;
+        this.collectTaskMetas().forEach(task => {
+          const zIndexGroup = this.zIndexGroupMap[task.id] || zIdx++;
+          this.addTaskOverlays(task, zIndexGroup);
+        });
+
         if (err){
           if (err !== "abort"){
               this.setState({error: err.message || JSON.stringify(err)});
@@ -858,7 +892,9 @@ _('Example:'),
     this.setState({showLoading: true});
     this.loadImageryLayers(true).then(() => {
         this.setState({showLoading: false});
-        this.map.fitBounds(this.mapBounds);
+        if (this.mapBounds && this.mapBounds.isValid && this.mapBounds.isValid()){
+          this.map.fitBounds(this.mapBounds);
+        }
 
         this.map.on('click', e => {
           if (PluginsAPI.Map.handleClick(e)) return;
@@ -1085,7 +1121,7 @@ _('Example:'),
               task={this.state.singleTask}
               project={this.props.project}
               linksTarget="map"
-              queryParams={{t: this.props.mapType}}
+              queryParams={{t: this.props.mapType, mode: this.props.mode}}
             />
           : ""}
           

@@ -4,6 +4,7 @@ import Map from './components/Map';
 import $ from 'jquery';
 import PropTypes from 'prop-types';
 import { _, interpolate } from './classes/gettext';
+import Utils from './classes/Utils';
 
 class MapView extends React.Component {
   static defaultProps = {
@@ -31,6 +32,7 @@ class MapView extends React.Component {
   constructor(props){
     super(props);
 
+    const requestedMode = Utils.queryParams(window.location).mode === "photos" ? "photos" : "processed";
     let selectedMapType = props.selectedMapType;
 
     // Automatically select type based on available tiles
@@ -54,8 +56,9 @@ class MapView extends React.Component {
     if (selectedMapType === "auto") selectedMapType = "orthophoto"; // Hope for the best
 
     this.state = {
+      mode: requestedMode,
       selectedMapType,
-      tiles: this.tilesFromMapType(selectedMapType)
+      tiles: requestedMode === "photos" ? [] : this.tilesFromMapType(selectedMapType)
     };
 
     this.tilesFromMapType = this.tilesFromMapType.bind(this);
@@ -145,6 +148,7 @@ class MapView extends React.Component {
 
     // If we have only one button, hide it...
     if (mapTypeButtons.length === 1) mapTypeButtons = [];
+    if (this.state.mode === "photos") mapTypeButtons = [];
 
     return (<div className="map-view">
         <div className="map-view-header">
@@ -166,8 +170,10 @@ class MapView extends React.Component {
         <div className="map-container">
             <Map 
                 tiles={this.state.tiles} 
+                mapItems={this.props.mapItems}
                 showBackground={true} 
                 mapType={this.state.selectedMapType} 
+                mode={this.state.mode}
                 public={this.props.public}
                 publicEdit={this.props.publicEdit}
                 shareButtons={this.props.shareButtons}
