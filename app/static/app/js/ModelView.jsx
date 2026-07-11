@@ -8,6 +8,8 @@ import ShareButton from './components/ShareButton';
 import ImagePopup from './components/ImagePopup';
 import Utils from './classes/Utils';
 import PropTypes from 'prop-types';
+import PluginsAPI from './classes/plugins/API';
+import update from 'immutability-helper';
 import * as THREE from 'THREE';
 import $ from 'jquery';
 import { _, interpolate } from './classes/gettext';
@@ -182,7 +184,8 @@ class ModelView extends React.Component {
       texModelLoadProgress: null,
       selectedCamera: null,
       modalOpen: false,
-      cameraScale: CAMERA_SCALES[props.task.srs.units] || 1.0
+      cameraScale: CAMERA_SCALES[props.task.srs.units] || 1.0,
+      pluginActionButtons: []
     };
 
     this.pointCloud = null;
@@ -285,7 +288,7 @@ class ModelView extends React.Component {
 
   objFilePath = (cb) => {
     // Mostly for backward compatibility
-    // as newer versions of ODM do not have 
+    // as newer versions of ODX do not have 
     // a odm_textured_model.obj
     const geoUrl = this.texturedModelDirectoryPath() + 'odm_textured_model_geo.obj';
     const nongeoUrl = this.texturedModelDirectoryPath() + 'odm_textured_model.obj';
@@ -311,7 +314,7 @@ class ModelView extends React.Component {
 
   mtlFilename = (cb) => {
     // Mostly for backward compatibility
-    // as newer versions of ODM do not have 
+    // as newer versions of ODX do not have 
     // a odm_textured_model.mtl
     const geoUrl = this.texturedModelDirectoryPath() + 'odm_textured_model_geo.mtl';
 
@@ -369,7 +372,11 @@ class ModelView extends React.Component {
     viewer.loadGUI(() => {
       viewer.setLanguage('en');
       $("#menu_tools").next().show();
-      viewer.toggleSidebar();
+
+    // Don't open sidebar on small screens
+    if (window.innerWidth > 600) {
+        viewer.toggleSidebar();
+    }
 
       if (this.hasTexturedModel()){
           window.ReactDOM.render(<TexturedModelMenu selected={this.props.modelType === 'mesh'} toggleTexturedModel={this.toggleTexturedModel}/>, $("#textured_model_button").get(0));
@@ -515,6 +522,13 @@ class ModelView extends React.Component {
     viewer.renderer.domElement.addEventListener( 'mousemove', this.handleRenderMouseMove );
     viewer.renderer.domElement.addEventListener( 'touchstart', this.handleRenderTouchStart );
     
+    PluginsAPI.ModelView.triggerAddActionButton({
+      viewer
+    }, (button) => {
+      this.setState(update(this.state, {
+        pluginActionButtons: {$push: [button]}
+      }));
+    });
   }
 
   handleUnitSystemChanged = () => {
@@ -851,6 +865,7 @@ class ModelView extends React.Component {
                             buttonClass="btn-secondary"
                             onModalOpen={() => this.setState({modalOpen: true})}
                             onModalClose={() => this.setState({modalOpen: false})} />
+            {this.state.pluginActionButtons.map((button, i) => <div key={i}>{button}</div>)}
             {(this.props.shareButtons && !this.props.public) ? 
             <ShareButton 
                 ref={(ref) => { this.shareButton = ref; }}

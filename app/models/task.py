@@ -37,21 +37,26 @@ from urllib3.exceptions import ReadTimeoutError
 from app import pending_actions
 from django.contrib.gis.db.models.fields import GeometryField
 
+from app.net import patch_dns_resolution, is_dns_resolution_problem
 from app.cogeo import assure_cogeo
 from app.pointcloud_utils import is_pointcloud_georeferenced
 from app.testwatch import testWatch
 from app.security import path_traversal_check
 from app.geoutils import geom_transform, epsg_from_wkt, get_raster_bounds_wkt, get_srs_name_units_from_epsg_or_wkt
+from app.imageutils import extract_gps_from_image, is_panorama
+from app.video import extract_subtitles, srt_file_for_video, extract_gps_from_srt, VIDEO_EXTENSIONS as VIDEO_MOD_EXTENSIONS
 from nodeodm import status_codes
 from nodeodm.models import ProcessingNode
-from pyodm.exceptions import NodeResponseError, NodeConnectionError, NodeServerError, OdmError
+from pyodx.exceptions import NodeResponseError, NodeConnectionError, NodeServerError, GenericError
 from webodm import settings
 from app.classes.gcp import GCPFile
 from .project import Project
 from django.utils.translation import gettext_lazy as _, gettext
 
+
 from functools import partial
 import subprocess
+import glob
 from app.classes.console import Console
 
 logger = logging.getLogger('app.logger')
@@ -284,6 +289,7 @@ class Task(models.Model):
     size = models.FloatField(default=0.0, blank=True, help_text=_("Size of the task on disk in megabytes"), verbose_name=_("Size"))
     compacted = models.BooleanField(default=False, help_text=_("A flag indicating whether this task was compacted"), verbose_name=_("Compact"))
     crop = GeometryField(null=True, blank=True, srid=4326, help_text=_("Polygon defining the crop area of this task"), verbose_name=_("Crop Polygon"))
+    media = fields.JSONField(default=list, blank=True, help_text=_("List of media files associated with this task"), verbose_name=_("Media"))
 
     
     class Meta:
@@ -376,7 +382,7 @@ class Task(models.Model):
         elif self.dsm_extent is not None:
             return self.dsm_extent.extent
         elif self.dtm_extent is not None:
-            return self.dsm_extent.extent
+            return self.dtm_extent.extent
         else:
             return None
 
@@ -385,6 +391,12 @@ class Task(models.Model):
         Get a path relative to the place where assets are stored
         """
         return self.task_path("assets", *args)
+
+    def media_directory_path(self, *args):
+        """
+        Get a path relative to the media directory for this task
+        """
+        return self.assets_path("media", *args)
 
     def data_path(self, *args):
         """
@@ -603,7 +615,10 @@ class Task(models.Model):
         # Import assets file from mounted system volume (media-dir)/imports by relative path.
         # Import file from relative path.
         if self.import_url and not os.path.exists(zip_path):
-            if self.import_url.startswith("file://"):
+            if self.import_url == "file://external":
+                # External asset import, files should already be in place
+                pass 
+            elif self.import_url.startswith("file://"):
                 imports_folder_path = os.path.join(settings.MEDIA_ROOT, "imports")
                 unsafe_path_to_import_file = os.path.join(settings.MEDIA_ROOT, "imports", self.import_url.replace("file://", ""))
                 # check is file placed in shared media folder in /imports directory without traversing
@@ -720,6 +735,7 @@ class Task(models.Model):
             if self.processing_node:
                 # Need to process some images (UUID not yet set and task doesn't have pending actions)?
                 if not self.uuid and self.pending_action is None and self.status is None:
+                    
                     logger.info("Processing... {}".format(self))
 
                     images_path = self.task_path()
@@ -763,7 +779,7 @@ class Task(models.Model):
                         # We don't care if this fails (we tried)
                         try:
                             self.processing_node.cancel_task(self.uuid)
-                        except OdmError:
+                        except GenericError:
                             logger.warning("Could not cancel {} on processing node. We'll proceed anyway...".format(self))
 
                         self.status = status_codes.CANCELED
@@ -787,7 +803,7 @@ class Task(models.Model):
                             try:
                                 info = self.processing_node.get_task_info(self.uuid)
                                 uuid_still_exists = info.uuid == self.uuid
-                            except OdmError:
+                            except GenericError:
                                 pass
 
                         need_to_reprocess = False
@@ -834,7 +850,7 @@ class Task(models.Model):
                         # Are expected to be purged on their own after a set amount of time anyway
                         try:
                             self.processing_node.remove_task(self.uuid)
-                        except OdmError:
+                        except GenericError:
                             pass
 
                     # What's more important is that we delete our task properly here
@@ -909,7 +925,7 @@ class Task(models.Model):
                                 logger.info("Downloading all.zip for {}".format(self))
 
                                 # Download all assets
-                                zip_path = self.processing_node.download_task_assets(self.uuid, assets_dir, progress_callback=callback, parallel_downloads=max(1, int(16 / (2 ** retry_num))))
+                                zip_path = self.processing_node.download_task_assets(self.uuid, assets_dir, progress_callback=callback, parallel_downloads=max(1, int(settings.NODE_CONNECTIONS / (2 ** retry_num))))
 
                                 # Rename to all.zip
                                 all_zip_path = self.assets_path("all.zip")
@@ -940,7 +956,17 @@ class Task(models.Model):
                         self.save()
 
         except (NodeServerError, NodeResponseError) as e:
-            self.set_failure(str(e))
+            if is_dns_resolution_problem(e):
+                logger.warning("{} DNS resolution failed with {}".format(self, str(e)))
+                
+                if patch_dns_resolution():
+                    logger.warning("Patched the DNS resolution process")
+                else:
+                    # Pause before unlocking the task, this gives more time to the faulty DNS to recover
+                    logger.warning("Pausing for 30 seconds to give the DNS time to recover")
+                    time.sleep(30)
+            else:
+                self.set_failure(str(e))
         except NodeConnectionError as e:
             logger.warning("{} connection/timeout error: {}. We'll try reprocessing at the next tick.".format(self, str(e)))
         except TaskInterruptedException as e:
@@ -949,50 +975,56 @@ class Task(models.Model):
 
     def extract_assets_and_complete(self):
         """
-        Extracts assets/all.zip, populates task fields where required and assure COGs
+        Extracts assets/all.zip (if available), populates task fields where required and assure COGs
         It will raise a zipfile.BadZipFile exception if the archive is corrupted.
         :return:
         """
         assets_dir = self.assets_path("")
         zip_path = self.assets_path("all.zip")
+        is_backup = False
 
-        # Extract from zip
-        try:
-            with zipfile.ZipFile(zip_path, "r") as zip_h:
-                zip_h.extractall(assets_dir)
-        except zlib.error as e:
-            raise zipfile.BadZipFile(str(e))
-
-        logger.info("Extracted all.zip for {}".format(self))
-        
-        os.remove(zip_path)
-
-        # Check if this looks like a backup file, in which case we need to move the files
-        # a directory level higher
-        is_backup = os.path.isfile(self.assets_path("data", "backup.json")) and os.path.isdir(self.assets_path("assets"))
-        if is_backup:
-            logger.info("Restoring from backup")
+        if os.path.isfile(zip_path):
+            # Extract from zip
             try:
-                tmp_dir = os.path.join(settings.FILE_UPLOAD_TEMP_DIR, f"{self.id}.backup")
-                
-                shutil.move(assets_dir, tmp_dir)
-                shutil.rmtree(self.task_path(""))
-                shutil.move(tmp_dir, self.task_path(""))
-            except shutil.Error as e:
-                logger.warning("Cannot restore from backup: %s" % str(e))
-                raise NodeServerError("Cannot restore from backup")
-        else:
-            # Check if the zip file contained a top level directory
-            # which shouldn't be there and try to fix the structure
-            top_level = [os.path.join(assets_dir, d) for d in os.listdir(assets_dir)]
-            if len(top_level) == 1 and os.path.isdir(top_level[0]) and (not top_level[0].endswith("odm_orthophoto")):
-                second_level = [os.path.join(top_level[0], f) for f in os.listdir(top_level[0])]
-                if len(second_level) > 0:
-                    logger.info("Top level directory found in imported archive, attempting to fix")
-                    for f in second_level:
-                        shutil.move(f, assets_dir)
-                    shutil.rmtree(top_level[0])
+                with zipfile.ZipFile(zip_path, "r") as zip_h:
+                    zip_h.extractall(assets_dir)
+            except zlib.error as e:
+                raise zipfile.BadZipFile(str(e))
+            finally:
+                os.remove(zip_path)
+            
+            logger.info("Extracted all.zip for {}".format(self))
 
+            # Check if this looks like a backup file, in which case we need to move the files
+            # a directory level higher
+            is_backup = os.path.isfile(self.assets_path("data", "backup.json")) and os.path.isdir(self.assets_path("assets"))
+            if is_backup:
+                logger.info("Restoring from backup")
+                try:
+                    tmp_dir = os.path.join(settings.FILE_UPLOAD_TEMP_DIR, f"{self.id}.backup")
+                    
+                    shutil.move(assets_dir, tmp_dir)
+                    shutil.rmtree(self.task_path(""))
+                    shutil.move(tmp_dir, self.task_path(""))
+                except shutil.Error as e:
+                    logger.warning("Cannot restore from backup: %s" % str(e))
+                    raise NodeServerError("Cannot restore from backup")
+            else:
+                # Check if the zip file contained a top level directory
+                # which shouldn't be there and try to fix the structure
+                top_level = [os.path.join(assets_dir, d) for d in os.listdir(assets_dir)]
+                if len(top_level) == 1 and os.path.isdir(top_level[0]) and (not top_level[0].endswith("odm_orthophoto")):
+                    second_level = [os.path.join(top_level[0], f) for f in os.listdir(top_level[0])]
+                    if len(second_level) > 0:
+                        logger.info("Top level directory found in imported archive, attempting to fix")
+                        for f in second_level:
+                            shutil.move(f, assets_dir)
+                        shutil.rmtree(top_level[0])
+
+        elif self.import_url != "file://external":
+            # all.zip should be missing only when doing external data import
+            logger.warning("Cannot find assets archive for {} ({})".format(self, zip_path))
+            raise NodeServerError("Cannot import task")
 
         # Populate *_extent fields
         extent_fields = self.get_extent_fields()
@@ -1019,6 +1051,7 @@ class Task(models.Model):
         self.update_available_assets_field()
         self.update_georef_fields()
         self.update_orthophoto_bands_field()
+        self.update_media_field()
         self.update_size()
         self.clear_task_assets_cache()
         self.potree_scene = {}
@@ -1096,9 +1129,10 @@ class Task(models.Model):
                 return file 
     
     def get_point_cloud(self):
-        f = os.path.realpath(self.assets_path(self.ASSETS_MAP["georeferenced_model.laz"]))
-        if os.path.isfile(f):
-            return f
+        for asset in ["georeferenced_model.laz", "georeferenced_model.las"]:
+            f = os.path.realpath(self.assets_path(self.ASSETS_MAP[asset]))
+            if os.path.isfile(f):
+                return f
 
     def get_tile_path(self, tile_type, z, x, y):
         return self.assets_path("{}_tiles".format(tile_type), z, x, "{}.png".format(y))
@@ -1124,6 +1158,10 @@ class Task(models.Model):
         ground_control_points = ''
         if 'ground_control_points.geojson' in self.available_assets: ground_control_points = '/api/projects/{}/tasks/{}/download/ground_control_points.geojson'.format(self.project.id, self.id)
 
+        media = ''
+        if isinstance(self.media, list) and len(self.media) > 0:
+             media = '/api/projects/{}/tasks/{}/media.geojson'.format(self.project.id, self.id)
+
         return {
             'tiles': [{'url': self.get_tile_base_url(t), 'type': t} for t in types],
             'meta': {
@@ -1141,6 +1179,7 @@ class Task(models.Model):
                     'orthophoto_bands': self.orthophoto_bands,
                     'crop': self.crop is not None,
                     'extent': self.get_extent(),
+                    'media': media
                 }
             }
         }
@@ -1261,6 +1300,94 @@ class Task(models.Model):
         self.orthophoto_bands = bands
         if commit: self.save()
 
+    PHOTO_EXTENSIONS = {'.jpg', '.jpeg', '.png'}
+    VIDEO_EXTENSIONS = VIDEO_MOD_EXTENSIONS
+    MEDIA_EXTENSIONS = PHOTO_EXTENSIONS | VIDEO_EXTENSIONS | {'.srt'}
+    MEDIA_TYPE_ORDER = {'photo': 0, 'pano': 1, 'video': 2}
+
+    @staticmethod
+    def get_media_type(filepath):
+        ext = os.path.splitext(filepath)[1].lower()
+        if ext in Task.VIDEO_EXTENSIONS:
+            return 'video'
+        if ext in Task.PHOTO_EXTENSIONS:
+            if is_panorama(filepath):
+                return 'pano'
+            return 'photo'
+        return None
+
+    def build_media_entry(self, filepath):
+        filename = os.path.basename(filepath)
+        media_type = self.get_media_type(filepath)
+        if media_type is None:
+            return None
+
+        size = os.path.getsize(filepath)
+        geolocation = None
+
+        existing = None
+        if self.media:
+            for entry in self.media:
+                if entry.get('filename') == filename:
+                    existing = entry
+                    break   
+
+        entry = {
+            'type': media_type,
+            'filename': filename,
+            'description': existing.get('description', '') if existing else '',
+            'size': size,
+        }
+
+        if media_type in ['photo', 'pano']:
+            geolocation = extract_gps_from_image(filepath)
+            if media_type == 'pano':
+                try:
+                    with Image.open(filepath) as im:
+                        entry['width'] = im.size[0]
+                        entry['height'] = im.size[1]
+                except Exception:
+                    pass
+
+        elif media_type == 'video':
+            # Try to extract SRT, parse geolocation at t = 0
+            if extract_subtitles(filepath):
+                srt_file = srt_file_for_video(filepath)
+                geolocation = extract_gps_from_srt(srt_file)
+                entry['srt'] = True
+        
+        entry['geolocation'] = geolocation
+        
+        return entry
+
+    def update_media_field(self, commit=False):
+        media_dir = self.media_directory_path()
+        if not os.path.isdir(media_dir):
+            if self.media:
+                self.media = []
+                if commit:
+                    self.save()
+            return
+
+        entries = []
+        for f in os.listdir(media_dir):
+            fp = os.path.join(media_dir, f)
+            if not os.path.isfile(fp):
+                continue
+            entry = self.build_media_entry(fp)
+            if entry is not None:
+                entries.append(entry)
+
+        entries.sort(key=lambda e: (self.MEDIA_TYPE_ORDER.get(e['type'], 99), e['filename'].lower()))
+        self.media = entries
+        if commit:
+            self.save()
+    
+    def get_media_entry(self, filename):
+        for entry in self.media:
+            if entry.get('filename') == filename:
+                return entry
+
     def delete(self, using=None, keep_parents=False):
         task_id = self.id
         from app.plugins import signals as plugin_signals
@@ -1362,7 +1489,7 @@ class Task(models.Model):
                     self.check_if_canceled()
                     last_update = time.time()
 
-        max_workers = min(settings.WORKERS_MAX_THREADS, len(images_path))
+        max_workers = max(1, min(settings.WORKERS_MAX_THREADS, len(images_path)))
         
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = []

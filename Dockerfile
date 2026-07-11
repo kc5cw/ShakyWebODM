@@ -99,7 +99,7 @@ RUN <<EOT
     # Setup cron
     chmod 0644 ./nginx/crontab
     ln -s ./nginx/crontab /var/spool/cron/crontabs/root
-    # NodeODM setup
+    # NodeODX setup
     chmod +x ./nginx/letsencrypt-autogen.sh
     ./nodeodm/setup.sh
     ./nodeodm/cleanup.sh
@@ -109,7 +109,8 @@ RUN <<EOT
     python manage.py collectstatic --noinput
     python manage.py rebuildplugins
     python manage.py translate build --safe
-    # Final cleanup
+    # Install ffmpeg
+    python /webodm/app/scripts/install_ffmpeg.py
     # Remove stale temp files
     rm -rf /tmp/* /var/tmp/*
     # Remove auto-generated secret key (happens on import of settings when none is defined)
@@ -155,6 +156,7 @@ EOT
 
 COPY --from=build /staging/entwine/build/install/bin/entwine /usr/bin/entwine
 COPY --from=build /staging/entwine/build/install/lib/libentwine* /usr/lib/
+COPY --from=build /usr/bin/ffmpeg /usr/bin/ffmpeg
 COPY --from=build $WORKDIR ./
 
 VOLUME /webodm/app/media

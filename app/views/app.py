@@ -8,7 +8,7 @@ from django.shortcuts import render, redirect, get_object_or_404
 from guardian.shortcuts import get_objects_for_user
 
 from nodeodm.models import ProcessingNode
-from app.models import Project, Task
+from app.models import Project, Task, Basemap
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.utils.translation import ugettext as _
@@ -61,7 +61,8 @@ def dashboard(request):
         'no_tasks': no_tasks,
         'onboarding': settings.DASHBOARD_ONBOARDING,
         'params': {
-            'permissions': json.dumps(permissions)
+            'permissions': json.dumps(permissions),
+            'basemaps': json.dumps(Basemap.get_cached_basemaps())
         }.items()
     })
 
@@ -92,9 +93,10 @@ def map(request, project_pk=None, task_pk=None):
                 'map-items': json.dumps(mapItems),
                 'title': title,
                 'public': 'false',
-                'share-buttons': 'false' if settings.DESKTOP_MODE else 'true',
+                'share-buttons': 'true',
                 'permissions': json.dumps(get_permissions(request.user, project)),
                 'project': json.dumps(projectInfo),
+                'basemaps': json.dumps(Basemap.get_cached_basemaps()),
             }.items()
         })
 
@@ -120,7 +122,7 @@ def model_display(request, project_pk=None, task_pk=None):
             'params': {
                 'task': json.dumps(task.get_model_display_params()),
                 'public': 'false',
-                'share-buttons': 'false' if settings.DESKTOP_MODE else 'true'
+                'share-buttons': 'true'
             }.items()
         })
 

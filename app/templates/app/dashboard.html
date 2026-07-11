@@ -14,7 +14,7 @@
 
 		<h3>{% trans 'Welcome!' %} ☺</h3>
 		{% trans 'Add a Processing Node' as add_processing_node %}
-		{% with nodeodm_link='<a href="https://github.com/OpenDroneMap/NodeODM" target="_blank">NodeODM</a>' api_link='<a href="https://github.com/OpenDroneMap/NodeODM/blob/master/docs/index.adoc" target="_blank">API</a>' %}
+		{% with nodeodm_link='<a href="https://github.com/WebODM/NodeODX" target="_blank">NodeODX</a>' api_link='<a href="https://github.com/WebODM/NodeODX/blob/master/docs/index.adoc" target="_blank">API</a>' %}
 			<p>
 			{% blocktrans %}To get started, "{{ add_processing_node }}". A processing node is a computer running an instance of {{ nodeodm_link }} or some other software implementing this {{ api_link }}.{% endblocktrans %}
 			</p>
@@ -60,7 +60,7 @@
 				<div class="placeholder-item pulse border shimmer" style="height: 100px; margin-top: 16px; width: 100%;"></div>
 			</div>
 		</div>
-		
+
 	{% endif %}
 
 	{% load render_bundle from webpack_loader %}

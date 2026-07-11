@@ -12,12 +12,13 @@ import $ from 'jquery';
 import ErrorMessage from './ErrorMessage';
 import ImagePopup from './ImagePopup';
 import GCPPopup from './GCPPopup';
+import MediaView from './MediaView';
 import SwitchModeButton from './SwitchModeButton';
 import ShareButton from './ShareButton';
 import {addTempLayer} from '../classes/TempLayer';
 import PropTypes from 'prop-types';
 import PluginsAPI from '../classes/plugins/API';
-import Basemaps from '../classes/Basemaps';
+
 import Standby from './Standby';
 import LayersControl from './LayersControl';
 import AssetDownloadButtons from './AssetDownloadButtons';
@@ -45,7 +46,8 @@ class Map extends React.Component {
     publicEdit: false,
     shareButtons: true,
     permissions: ["view"],
-    thermal: false
+    thermal: false,
+    basemaps: []
   };
 
   static propTypes = {
@@ -59,7 +61,8 @@ class Map extends React.Component {
     shareButtons: PropTypes.bool,
     permissions: PropTypes.array,
     thermal: PropTypes.bool,
-    project: PropTypes.object
+    project: PropTypes.object,
+    basemaps: PropTypes.array
   };
 
   constructor(props) {
@@ -82,6 +85,7 @@ class Map extends React.Component {
     this.autolayers = null;
     this.taskCount = 1;
     this.addedCameraShots = {};
+    this.addedMediaLayer = {};
     this.zIndexGroupMap = {};
     this.ious = {};
 
@@ -267,7 +271,11 @@ class Map extends React.Component {
 
   tdPopupButtonUrl = (task) => {
     if (this.props.public){
-      return `/public/task/${task.id}/3d/`;
+      if (location.href.indexOf("/iframe/") !== -1){
+        return `/public/task/${task.id}/iframe/3d/`;
+      }else{
+        return `/public/task/${task.id}/3d/`;
+      }
     }else{
       return `/3d/project/${task.project}/task/${task.id}/`;
     }
@@ -618,6 +626,223 @@ class Map extends React.Component {
             mapBounds.extend(bounds);
             this.mapBounds = mapBounds;
 
+            // Add media layer if available
+            if (meta.task && meta.task.media && !this.addedMediaLayer[meta.task.id]){
+                const mediaTypes = ['photo', 'pano', 'video'];
+                const mediaIcons = mediaTypes.reduce((obj, type) => {
+                  obj[type] = L.icon({
+                    iconUrl: `/static/app/js/icons/marker-media-${type}.png`,
+                    iconSize: [41, 46],
+                    iconAnchor: [17, 46],
+                  })
+                  return obj;
+                }, {});
+                  
+                const mediaLayer = new L.MarkersCanvas();
+                
+                mediaLayer.lazyLoad = (cb) => {
+                  $.getJSON(meta.task.media)
+                    .done((geojson) => {
+                      if (geojson.type === 'FeatureCollection'){
+                        let markers = [];
+  
+                        geojson.features.forEach(s => {
+                          if (!s.properties) return;
+                          if (mediaTypes.indexOf(s.properties.type) === -1) return;
+
+                          let marker = L.marker(
+                            [s.geometry.coordinates[1], s.geometry.coordinates[0]],
+                            { icon: mediaIcons[s.properties.type] }
+                          );
+                          markers.push(marker);
+
+                          marker.on('click', (e) => {
+                            const basePath = `/api/projects/${meta.task.project}/tasks/${meta.task.id}/media`;
+
+                            if (s.properties.type === 'video' && s.properties.srt) {
+                              this.openVideoWithFlightPath(basePath, s.properties, marker, mediaLayer);
+                              return;
+                            }
+
+                            const container = document.createElement('div');
+                            ReactDOM.render(<MediaView
+                              basePath={basePath}
+                              media={s.properties}
+                              autoOpen
+                              onClose={() => {
+                                ReactDOM.unmountComponentAtNode(container);
+                                container.remove();
+                                this.map.closePopup();
+                              }}
+                            />, container);
+                            document.body.appendChild(container);
+                          });
+
+                        });
+  
+                        mediaLayer.addMarkers(markers, this.map);
+                      }
+                      cb();
+                    }).fail(() => {
+                      cb(new Error("Cannot load media markers"))
+                    });
+                };
+                mediaLayer[Symbol.for("meta")] = {
+                  name: _("Media"), 
+                  icon: "fa fa-image fa-fw",
+                  zIndexGroup
+                };
+                if (this.taskCount > 1){
+                  // Assign to a group
+                  mediaLayer[Symbol.for("meta")].group = {id: meta.task.id, name: meta.task.name};
+                }
+
+                this.setState(update(this.state, {
+                    overlays: {$push: [mediaLayer]}
+                }));
+
+                this.addedMediaLayer[meta.task.id] = true;
+            }
+
+            // Add camera shots layer if available
+            if (meta.task && meta.task.camera_shots && !this.addedCameraShots[meta.task.id]){
+                var camIcon = L.icon({
+                  iconUrl: "/static/app/js/icons/marker-camera.png",
+                  iconSize: [41, 46],
+                  iconAnchor: [17, 46],
+                });
+                
+                const shotsLayer = new L.MarkersCanvas();
+                
+                shotsLayer.lazyLoad = (cb) => {
+                  $.getJSON(meta.task.camera_shots)
+                    .done((shots) => {
+                      if (shots.type === 'FeatureCollection'){
+                        let markers = [];
+  
+                        shots.features.forEach(s => {
+                          let marker = L.marker(
+                            [s.geometry.coordinates[1], s.geometry.coordinates[0]],
+                            { icon: camIcon }
+                          );
+                          markers.push(marker);
+  
+                          if (s.properties && s.properties.filename){
+                            let root = null;
+                            const lazyrender = () => {
+                                if (!root) root = document.createElement("div");
+                                ReactDOM.render(<ImagePopup task={meta.task} feature={s}/>, root);
+                                return root;
+                            }
+  
+                            marker.bindPopup(L.popup(
+                                {
+                                    lazyrender,
+                                    maxHeight: 450,
+                                    minWidth: 320
+                                }));
+                          }
+                        });
+  
+                        shotsLayer.addMarkers(markers, this.map);
+                      }
+                      cb();
+                    }).fail(() => {
+                      cb(new Error("Cannot load camera shots"))
+                    });
+                };
+                shotsLayer[Symbol.for("meta")] = {
+                  name: _("Cameras"), 
+                  icon: "fa fa-camera fa-fw",
+                  zIndexGroup
+                };
+                if (this.taskCount > 1){
+                  // Assign to a group
+                  shotsLayer[Symbol.for("meta")].group = {id: meta.task.id, name: meta.task.name};
+                }
+
+                this.setState(update(this.state, {
+                    overlays: {$push: [shotsLayer]}
+                }));
+
+                this.addedCameraShots[meta.task.id] = true;
+            }
+
+            // Add ground control points layer if available
+            if (meta.task && meta.task.ground_control_points && !this.addedGroundControlPoints){
+                const gcpIcon = L.icon({
+                  iconUrl: "/static/app/js/icons/marker-gcp.png",
+                  iconSize: [41, 46],
+                  iconAnchor: [17, 46],
+                });
+                const cpIcon = L.icon({
+                  iconUrl: "/static/app/js/icons/marker-cp.png",
+                  iconSize: [41, 46],
+                  iconAnchor: [17, 46],
+                });
+                
+                const gcpLayer = new L.MarkersCanvas();
+                gcpLayer.lazyLoad = (cb) => {
+                  $.getJSON(meta.task.ground_control_points)
+                    .done((gcps) => {
+                      if (gcps.type === 'FeatureCollection'){
+                        let markers = [];
+  
+                        gcps.features.forEach(gcp => {
+                          let icon = gcpIcon;
+                          if (gcp.properties && typeof gcp.properties.id === "string" && gcp.properties.id.startsWith("CHK-")) icon = cpIcon;
+  
+                          let marker = L.marker(
+                            [gcp.geometry.coordinates[1], gcp.geometry.coordinates[0]],
+                            { icon }
+                          );
+                          markers.push(marker);
+  
+                          if (gcp.properties && gcp.properties.observations){
+                            let root = null;
+                            const lazyrender = () => {
+                                  if (!root) root = document.createElement("div");
+                                  ReactDOM.render(<GCPPopup task={meta.task} feature={gcp}/>, root);
+                                  return root;
+                            }
+  
+                            marker.bindPopup(L.popup(
+                                {
+                                    lazyrender,
+                                    maxHeight: 450,
+                                    minWidth: 320
+                                }));
+                          }
+                        });
+  
+                        gcpLayer.addMarkers(markers, this.map);
+                      }
+
+                      cb();
+                    }).fail(() => {
+                      cb(new Error("Cannot load GCPs"))
+                    });
+                };
+                gcpLayer[Symbol.for("meta")] = {
+                  name: _("Ground Control Points"), 
+                  icon: "far fa-dot-circle fa-fw",
+                  zIndexGroup
+                };
+                
+                if (this.taskCount > 1){
+                  // Assign to a group
+                  gcpLayer[Symbol.for("meta")].group = {id: meta.task.id, name: meta.task.name};
+                }
+
+                this.setState(update(this.state, {
+                    overlays: {$push: [gcpLayer]}
+                }));
+
+                this.addedGroundControlPoints = true;
+            }
+
+            // Photo-only task views may not have an imagery tile yet. Keep the
+            // task overlay path available before and after processing.
             this.addTaskOverlays(meta.task, zIndexGroup);
 
             done();
@@ -691,32 +916,46 @@ class Map extends React.Component {
 
     if (showBackground) {
       this.basemaps = {};
-      
-      Basemaps.forEach((src, idx) => {
-        const { url, ...props } = src;
-        const tileProps = Utils.clone(props);
-        tileProps.maxNativeZoom = tileProps.maxZoom;
-        tileProps.maxZoom = tileProps.maxZoom + 99;
-        const layer = L.tileLayer(url, tileProps);
+      const basemaps = this.props.basemaps;
+      if (basemaps.length > 0) {
+        basemaps.forEach(bm => {
+          let layer;
+          const opts = {
+            layers: bm.layers || '0',
+            styles: bm.styles || 'default',
+            format: bm.format || 'image/png',
+            transparent: (bm.format || 'image/png') == 'image/png',
+            attribution: bm.attribution || bm.label,
+            maxZoom: (bm.maxzoom || 21) + 99,
+            maxNativeZoom: bm.maxzoom || 21,
+            minZoom: bm.minzoom || 0,
+            subdomains: bm.subdomains || [],
+          }
+          if (bm.type === 'wms') {
+            layer = L.tileLayer.wms(bm.url, opts);
+          } else {
+            layer = L.tileLayer(bm.url, opts);
+          }
 
-        if (idx === 0) {
-          layer.addTo(this.map);
-        }
+          if (bm['default']) {
+            layer.addTo(this.map);
+          }
 
-        this.basemaps[props.label] = layer;
-      });
+          this.basemaps[bm.label] = layer;
+        });
+      }
 
       const customLayer = L.layerGroup();
       customLayer.on("add", a => {
         const defaultCustomBm = window.localStorage.getItem('lastCustomBasemap') || 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
-      
+
         let url = window.prompt([_('Enter a tile URL template. Valid coordinates are:'),
 _('{z}, {x}, {y} for Z/X/Y tile scheme'),
-_('{-y} for flipped TMS-style Y coordinates'),
+_('{−y} for flipped TMS-style Y coordinates'),
 '',
 _('Example:'),
 'https://tile.openstreetmap.org/{z}/{x}/{y}.png'].join("\n"), defaultCustomBm);
-        
+
         if (url){
           customLayer.clearLayers();
           const l = L.tileLayer(url, {
@@ -728,7 +967,7 @@ _('Example:'),
           l.bringToBack();
           window.localStorage.setItem('lastCustomBasemap', url);
         }
-      });
+     });
       this.basemaps[_("Custom")] = customLayer;
       this.basemaps[_("None")] = L.layerGroup();
     }
@@ -1091,6 +1330,188 @@ _('Example:'),
     if (this.shareButton) this.shareButton.hidePopup();
   }
 
+  openVideoWithFlightPath = (basePath, media, marker, mediaLayer) => {
+    if (marker._flightPathLoading) return;
+    marker._flightPathLoading = true;
+
+    const flightPathUrl = `${basePath}/video/${encodeURIComponent(media.filename)}/flightpath.geojson`;
+
+    const markerLatLng = marker.getLatLng();
+    const spinnerIcon = L.divIcon({
+      className: 'video-marker-spinner',
+      html: '<i class="fa fa-circle-notch fa-spin"></i>',
+      iconSize: [41, 46],
+      iconAnchor: [15, 44]
+    });
+    const spinnerMarker = L.marker(markerLatLng, { icon: spinnerIcon }).addTo(this.map);
+
+    const onFlightPathLoaded = (feature) => {
+      if (!feature || !feature.geometry || !feature.geometry.coordinates || feature.geometry.coordinates.length < 2) {
+        return;
+      }
+      marker._flightPathFeature = feature; // cache
+      mediaLayer.removeMarker(marker);
+
+      const coords = feature.geometry.coordinates;
+      const timestamps = feature.properties.timestamps;
+      const latLngs = coords.map(c => [c[1], c[0]]);
+
+      const flightPathLine = L.polyline(latLngs, {
+        color: '#4A90D9',
+        weight: 4,
+        opacity: 0.8
+      }).addTo(this.map);
+
+      const startDot = L.circleMarker(latLngs[0], {
+        radius: 8,
+        color: '#fff',
+        weight: 2,
+        fillColor: '#2ECC71',
+        fillOpacity: 1
+      }).addTo(this.map);
+
+      const endDot = L.circleMarker(latLngs[latLngs.length - 1], {
+        radius: 8,
+        color: '#fff',
+        weight: 2,
+        fillColor: '#E74C3C',
+        fillOpacity: 1
+      }).addTo(this.map);
+
+      const positionDot = L.circleMarker(latLngs[0], {
+        radius: 8,
+        color: '#fff',
+        weight: 2,
+        fillColor: '#FF9E67',
+        fillOpacity: 1
+      }).addTo(this.map);
+
+      const mapEl = this.container.parentElement;
+      const mapHeight = mapEl ? mapEl.clientHeight : 0;
+      this.map.fitBounds(flightPathLine.getBounds(), {
+        paddingTopLeft: [50, mapHeight / 2 + 50],
+        paddingBottomRight: [50, 50]
+      });
+
+      const getPositionAtTime = (currentTime) => {
+        if (!timestamps || timestamps.length < 2) return latLngs[0];
+        if (currentTime <= timestamps[0]) return latLngs[0];
+        if (currentTime >= timestamps[timestamps.length - 1]) return latLngs[latLngs.length - 1];
+
+        for (let i = 1; i < timestamps.length; i++) {
+          if (currentTime <= timestamps[i]) {
+            const t0 = timestamps[i - 1];
+            const t1 = timestamps[i];
+            const frac = (currentTime - t0) / (t1 - t0);
+            const lat = latLngs[i - 1][0] + frac * (latLngs[i][0] - latLngs[i - 1][0]);
+            const lng = latLngs[i - 1][1] + frac * (latLngs[i][1] - latLngs[i - 1][1]);
+            return [lat, lng];
+          }
+        }
+        return latLngs[latLngs.length - 1];
+      };
+
+      const getTimeAtPoint = (latlng) => {
+        if (!timestamps || timestamps.length < 2) return 0;
+
+        let bestDist = Infinity;
+        let bestTime = 0;
+
+        for (let i = 1; i < latLngs.length; i++) {
+          const ax = latLngs[i - 1][1], ay = latLngs[i - 1][0];
+          const bx = latLngs[i][1], by = latLngs[i][0];
+          const px = latlng.lng, py = latlng.lat;
+
+          const dx = bx - ax, dy = by - ay;
+          const lenSq = dx * dx + dy * dy;
+          let t = lenSq > 0 ? ((px - ax) * dx + (py - ay) * dy) / lenSq : 0;
+          t = Math.max(0, Math.min(1, t));
+
+          const cx = ax + t * dx, cy = ay + t * dy;
+          const dist = (px - cx) * (px - cx) + (py - cy) * (py - cy);
+
+          if (dist < bestDist) {
+            bestDist = dist;
+            bestTime = timestamps[i - 1] + t * (timestamps[i] - timestamps[i - 1]);
+          }
+        }
+        return bestTime;
+      };
+
+      let videoEl = null;
+      let animFrameId = null;
+
+      flightPathLine.on('click', (e) => {
+        if (videoEl) {
+          L.DomEvent.stopPropagation(e);
+          videoEl.currentTime = getTimeAtPoint(e.latlng);
+        }
+      });
+      
+      let cleanupCalled = false;
+      const cleanup = () => {
+        if (cleanupCalled) return;
+        cleanupCalled = true;
+        if (animFrameId) cancelAnimationFrame(animFrameId);
+        this.map.removeLayer(flightPathLine);
+        this.map.removeLayer(startDot);
+        this.map.removeLayer(endDot);
+        this.map.removeLayer(positionDot);
+        mediaLayer.addMarker(marker, this.map);
+        marker._flightPathLoading = false;
+        ReactDOM.unmountComponentAtNode(container);
+        container.remove();
+      };
+
+      const mapContainer = this.container.parentElement;
+      const container = document.createElement('div');
+      ReactDOM.render(<MediaView
+        basePath={basePath}
+        media={media}
+        autoOpen
+        halfScreen
+        mapContainer={mapContainer}
+        onVideoElement={(el) => {
+          videoEl = el;
+          const tick = () => {
+            positionDot.setLatLng(getPositionAtTime(el.currentTime));
+            animFrameId = requestAnimationFrame(tick);
+          };
+          animFrameId = requestAnimationFrame(tick);
+        }}
+        onClose={cleanup}
+      />, container);
+      document.body.appendChild(container);
+    };
+
+    // Check cache
+    if (marker._flightPathFeature){
+      onFlightPathLoaded(marker._flightPathFeature);
+      this.map.removeLayer(spinnerMarker);
+      marker._flightPathLoading = false;
+    }else{
+      $.getJSON(flightPathUrl)
+        .done(onFlightPathLoaded)
+        .fail(() => {
+          const container = document.createElement('div');
+          ReactDOM.render(<MediaView
+            basePath={basePath}
+            media={media}
+            autoOpen
+            onClose={() => {
+              ReactDOM.unmountComponentAtNode(container);
+              container.remove();
+            }}
+          />, container);
+          document.body.appendChild(container);
+        })
+        .always(() => {
+          this.map.removeLayer(spinnerMarker);
+          marker._flightPathLoading = false;
+        });
+    }
+  }
+
   render() {
     return (
       <div style={{height: "100%"}} className="map">
@@ -1098,7 +1519,7 @@ _('Example:'),
 
         <ErrorMessage bind={[this, 'error']} />
         <div className="opacity-slider theme-secondary hidden-xs">
-            <div className="opacity-slider-label">{_("Opacity:")}</div> <input type="range" className="opacity" step="1" value={this.state.opacity} onChange={this.updateOpacity} />
+            <div className="opacity-slider-label" title={_("Opacity")}><i className="fa fa-adjust"></i></div> <input type="range" className="opacity" step="1" value={this.state.opacity} onChange={this.updateOpacity} />
         </div>
 
         <Standby 

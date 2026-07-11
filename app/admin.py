@@ -6,6 +6,8 @@ import shutil
 from django.conf.urls import url
 from django.contrib import admin
 from django.contrib import messages
+from django.contrib.admin.widgets import AdminFileWidget
+from django.core.files import File
 from django.http import HttpResponseRedirect
 from django.urls import reverse
 from django.utils.html import format_html
@@ -18,6 +20,7 @@ from app.models import Preset
 from app.models import Plugin
 from app.models import Profile
 from app.models import Redirect
+from app.models import Basemap
 from app.plugins import get_plugin_by_name, enable_plugin, disable_plugin, delete_plugin, valid_plugin, \
     get_plugins_persistent_path, clear_plugins_cache, init_plugins
 from .models import Project, Task, Setting, Theme
@@ -72,12 +75,69 @@ admin.site.register(Task, TaskAdmin)
 admin.site.register(Preset, admin.ModelAdmin)
 
 
+class AppLogoWidget(AdminFileWidget):
+    template_name = 'admin/widgets/app_logo_file_input.html'
+
+
+class SettingAdminForm(forms.ModelForm):
+    class Meta:
+        model = Setting
+        fields = '__all__'
+        widgets = {
+            'app_logo': AppLogoWidget(),
+        }
+
+
 class SettingAdmin(admin.ModelAdmin):
+    form = SettingAdminForm
+    fields = ('app_name', 'app_logo', 'app_logo_preview', 'restore_default_logo',
+              'organization_name', 'organization_website', 'theme')
+    readonly_fields = ('app_logo_preview', 'restore_default_logo')
+
+    @staticmethod
+    def set_default_logo(obj):
+        default_logo_path = os.path.join(settings.BASE_DIR, 'app', 'static', 'app', 'img', 'logo512.png')
+        if not os.path.exists(default_logo_path):
+            return False
+
+        with open(default_logo_path, 'rb') as default_logo_file:
+            obj.app_logo.save('logo512.png', File(default_logo_file), save=False)
+        return True
+
+    def save_model(self, request, obj, form, change):
+        if '_restore_default_logo' in request.POST:
+            if not self.set_default_logo(obj):
+                messages.error(request, _("Cannot restore default logo"))
+
+        super().save_model(request, obj, form, change)
+
+    def app_logo_preview(self, obj):
+        if not obj or not obj.app_logo:
+            return '-'
+
+        logo_url = '/media/{}'.format(obj.app_logo.url)
+        return format_html(f'<img src="{logo_url}" style="position: relative; left: -9px; max-height: 64px; padding: 4px; background: {obj.theme.header_background};"/>')
+
+    def restore_default_logo(self, obj):
+        return format_html(
+            '<button type="submit" style="padding: 6px; position: relative; left: -9px;" class="button" name="_restore_default_logo" value="1">{}</button>',
+            _('Restore Default')
+        )
 
     def has_add_permission(self, request):
         # if there's already an entry, do not allow adding
         return not Setting.objects.exists()
 
+    def has_delete_permission(self, request, obj=None):
+        return Setting.objects.count() > 1
+    
+    def get_form(self, request, obj=None, **kwargs):
+        form = super().get_form(request, obj, **kwargs)
+        form.base_fields['theme'].widget.can_add_related = False
+        form.base_fields['theme'].widget.can_change_related = False
+        form.base_fields['theme'].widget.can_delete_related = False
+        
+        return form
 
 admin.site.register(Setting, SettingAdmin)
 
@@ -113,9 +173,34 @@ class ThemeModelForm(forms.ModelForm):
 class ThemeAdmin(admin.ModelAdmin):
     form = ThemeModelForm
 
+    def has_delete_permission(self, request, obj=None):
+        if Theme.objects.count() <= 1:
+            return False
+        return super().has_delete_permission(request, obj)
+
 
 admin.site.register(Theme, ThemeAdmin)
 admin.site.register(PluginDatum, admin.ModelAdmin)
+
+
+class BasemapModelForm(forms.ModelForm):
+    class Meta:
+        model = Basemap
+        fields = '__all__'
+        widgets = {
+            'minzoom': forms.NumberInput(attrs={'min': 0, 'max': 99}),
+            'maxzoom': forms.NumberInput(attrs={'min': 0, 'max': 99}),
+        }
+
+
+class BasemapAdmin(admin.ModelAdmin):
+    form = BasemapModelForm
+    list_display = ('label', 'type', 'maxzoom', 'layers', 'default')
+    list_filter = ('type', 'default')
+    search_fields = ('label', 'url', 'layers')
+    list_display_links = ('label', )
+
+admin.site.register(Basemap, BasemapAdmin)
 
 if settings.CLUSTER_ID is not None:
     admin.site.register(Redirect, admin.ModelAdmin)

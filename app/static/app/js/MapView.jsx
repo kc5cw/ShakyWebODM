@@ -15,7 +15,8 @@ class MapView extends React.Component {
     publicEdit: false,
     shareButtons: true,
     permissions: ["view"],
-    project: null
+    project: null,
+    basemaps: []
   };
 
   static propTypes = {
@@ -26,7 +27,8 @@ class MapView extends React.Component {
       publicEdit: PropTypes.bool,
       shareButtons: PropTypes.bool,
       permissions: PropTypes.array,
-      project: PropTypes.object
+      project: PropTypes.object,
+      basemaps: PropTypes.array
   };
 
   constructor(props){
@@ -150,6 +152,15 @@ class MapView extends React.Component {
     if (mapTypeButtons.length === 1) mapTypeButtons = [];
     if (this.state.mode === "photos") mapTypeButtons = [];
 
+    // Requested page for map without map items
+    if (this.state.tiles.length === 0){
+      return (<div className="map-view">
+        <div className="alert alert-info" style={{marginTop: this.props.public ? "24px" : "0px"}}>
+         <i className="fa fa-info-circle"></i> {_("A map is not available for this task or project.")}
+        </div>
+      </div>);
+    }
+
     return (<div className="map-view">
         <div className="map-view-header">
           {this.props.title ?
@@ -180,6 +191,7 @@ class MapView extends React.Component {
                 permissions={this.props.permissions}
                 thermal={isThermal}
                 project={this.props.project}
+                basemaps={this.props.basemaps}
             />
         </div>
       </div>);
