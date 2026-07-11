@@ -15,7 +15,7 @@ services:
   worker:
     image: shakywebodm/webapp:3.2.5
 
-  node-odm-1:
+  node-odx-1:
     image: opendronemap/nodeodm:latest
     container_name: webodm-node-odm-1
     restart: unless-stopped

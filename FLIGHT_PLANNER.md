@@ -3,7 +3,8 @@
 The optional `docker-compose.shaky.yml` overlay runs:
 
 - the ShakyWebODM image built from this repository;
-- the existing local NodeODM processing node on port 3000;
+- the existing local NodeODM processing node, exposed on port 3000 and reachable
+  by WebODM's current `node-odx-1` service name;
 - DroneRoute 0.7.1 on port 3001.
 
 ## Configuration
