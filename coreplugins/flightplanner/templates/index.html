@@ -1,0 +1,60 @@
+{% extends "app/plugins/templates/base.html" %}
+{% load i18n %}
+
+{% block content %}
+<style>
+  .fp-shell { --ink: #102a2e; --teal: #0b6b61; --sun: #f0b44d; color: var(--ink); }
+  .fp-hero { position: relative; overflow: hidden; padding: 34px; border-radius: 18px; color: #f7fbf6; background: linear-gradient(125deg, #102a2e 0%, #0b6b61 62%, #2f8972 100%); box-shadow: 0 18px 45px rgba(16,42,46,.2); }
+  .fp-hero:after { content: ""; position: absolute; width: 260px; height: 260px; right: -80px; top: -130px; border: 35px solid rgba(240,180,77,.22); border-radius: 50%; }
+  .fp-kicker { text-transform: uppercase; letter-spacing: .17em; color: #f5cc82; font-weight: 700; font-size: 11px; }
+  .fp-hero h2 { margin: 8px 0 10px; font-size: 34px; font-weight: 800; }
+  .fp-hero p { max-width: 680px; color: #d6e8e3; font-size: 16px; line-height: 1.55; }
+  .fp-launch { margin-top: 14px; background: var(--sun); border: 0; color: #182b2c; font-weight: 800; padding: 11px 18px; border-radius: 8px; }
+  .fp-launch:hover, .fp-launch:focus { background: #ffd07a; color: #102a2e; }
+  .fp-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 18px; }
+  .fp-card { border: 1px solid #dbe5e0; border-radius: 13px; padding: 18px; background: #fff; box-shadow: 0 6px 22px rgba(16,42,46,.06); }
+  .fp-card h4 { margin: 0 0 8px; font-weight: 800; }
+  .fp-status { display: inline-flex; align-items: center; gap: 7px; padding: 5px 9px; border-radius: 99px; font-weight: 700; font-size: 12px; }
+  .fp-status.ok { background: #dff3e8; color: #176442; }
+  .fp-status.warn { background: #fff0d1; color: #7d5410; }
+  .fp-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+  .fp-note { margin-top: 18px; border-left: 4px solid var(--sun); background: #fff9ed; padding: 13px 16px; border-radius: 0 8px 8px 0; }
+  @media (max-width: 800px) { .fp-grid { grid-template-columns: 1fr; } .fp-hero { padding: 25px; } .fp-hero h2 { font-size: 28px; } }
+</style>
+
+<div class="fp-shell">
+  <section class="fp-hero">
+    <div class="fp-kicker">ShakyWebODM mission tools</div>
+    <h2>Plan the flight before processing the map.</h2>
+    <p>Build grid surveys, orbits, facade scans, and hand-drawn routes. Review distance, duration, battery estimates, gimbal actions, and points of interest, then export a KMZ mission.</p>
+    <a id="flight-planner-launch" class="btn fp-launch" href="#" target="_blank" rel="noopener"><i class="fa fa-external-link-alt"></i>&nbsp; Open Flight Planner</a>
+  </section>
+
+  <section class="fp-grid">
+    <article class="fp-card">
+      <h4>Planner service</h4>
+      <span class="fp-status {% if planner_ready %}ok{% else %}warn{% endif %}"><span class="fp-dot"></span>{% if planner_ready %}Online{% else %}Unavailable{% endif %}</span>
+      <p>{% if planner_ready %}DroneRoute answered its health check.{% else %}The planner container is not answering. Check <code>docker compose ps flightplanner</code>.{% endif %}</p>
+    </article>
+    <article class="fp-card">
+      <h4>Map configuration</h4>
+      <span class="fp-status {% if map_configured %}ok{% else %}warn{% endif %}"><span class="fp-dot"></span>{% if map_configured %}Configured{% else %}Token needed{% endif %}</span>
+      <p>{% if map_configured %}The map provider token is present.{% else %}Add <code>MAPBOX_TOKEN</code> to <code>.env</code>, then restart the planner.{% endif %}</p>
+    </article>
+    <article class="fp-card">
+      <h4>Mission toolkit</h4>
+      <p>Grid survey, orbit, facade, pencil route, POIs, smart gimbal, camera actions, estimates, and KMZ import/export.</p>
+    </article>
+  </section>
+
+  <div class="fp-note"><strong>DJI Air 3S:</strong> use the planner to design and inspect geometry and exports. Direct autonomous mission import is experimental and must be validated in DJI software before flight.</div>
+</div>
+
+<script>
+  (function () {
+    var port = "{{ planner_port|escapejs }}";
+    var plannerUrl = window.location.protocol + "//" + window.location.hostname + ":" + port + "/";
+    document.getElementById("flight-planner-launch").href = plannerUrl;
+  }());
+</script>
+{% endblock %}

@@ -1,0 +1,12 @@
+{
+  "name": "Flight Planner",
+  "webodmMinVersion": "3.2.5",
+  "description": "Launch and monitor the self-hosted DroneRoute mission planner.",
+  "version": "1.0.0",
+  "author": "ShakyWebODM",
+  "repository": "https://github.com/kc5cw/ShakyWebODM",
+  "tags": ["flight planning", "missions", "dji", "kmz"],
+  "homepage": "https://github.com/fcsonline/droneroute",
+  "experimental": false,
+  "deprecated": false
+}

@@ -1,0 +1,43 @@
+version: '2.1'
+
+volumes:
+  droneroute-data:
+
+services:
+  webapp:
+    image: shakywebodm/webapp:3.2.5
+    build: .
+    environment:
+      - FLIGHTPLANNER_HEALTH_URL=http://flightplanner:3001/api/health
+      - FLIGHTPLANNER_PORT=3001
+      - MAPBOX_TOKEN
+
+  worker:
+    image: shakywebodm/webapp:3.2.5
+
+  node-odm-1:
+    image: opendronemap/nodeodm:latest
+    container_name: webodm-node-odm-1
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - ODM_IMAGE=opendronemap/odm:latest
+    volumes:
+      - ${WO_NODEODM_DIR:-/var/lib/webodm-nodeodm}:/var/www/data
+
+  flightplanner:
+    image: fcsonline/droneroute:0.7.1@sha256:fd55994fb6e3731f30ce89e22beb4dca8b9b9b0e8b688b42e888bd336016ebd5
+    container_name: shakywebodm-flightplanner
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      - PORT=3001
+      - SELF_HOSTED=true
+      - DB_PATH=/app/data/droneroute.db
+      - MAPBOX_TOKEN
+      - DEFAULT_MAP_VIEW=${FLIGHTPLANNER_DEFAULT_VIEW:-39.7392,-104.9903,11}
+      - JWT_SECRET=${FLIGHTPLANNER_JWT_SECRET}
+    volumes:
+      - droneroute-data:/app/data
