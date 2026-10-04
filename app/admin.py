@@ -25,6 +25,7 @@ from django import forms
 from codemirror2.widgets import CodeMirrorEditor
 from webodm import settings
 from django.core.files.uploadedfile import InMemoryUploadedFile
+from django.core.exceptions import PermissionDenied
 from django.utils.translation import gettext_lazy as _, gettext
 
 
@@ -132,6 +133,20 @@ class PluginAdmin(admin.ModelAdmin):
     def has_delete_permission(self, request, obj=None):
         return False
 
+    def has_module_permission(self, request):
+        return self.has_change_permission(request)
+
+    def has_view_permission(self, request, obj=None):
+        return self.has_change_permission(request, obj)
+
+    def has_change_permission(self, request, obj=None):
+        user = request.user
+        return user.is_authenticated and user.is_active and user.is_staff and user.is_superuser
+
+    def require_plugin_management_permission(self, request):
+        if not self.has_change_permission(request):
+            raise PermissionDenied
+
     def description(self, obj):
         manifest = get_plugin_by_name(obj.name, only_active=False, refresh_cache_if_none=True).get_manifest()
         return _(manifest.get('description', ''))
@@ -177,6 +192,7 @@ class PluginAdmin(admin.ModelAdmin):
         return custom_urls + urls
 
     def plugin_enable(self, request, plugin_name, *args, **kwargs):
+        self.require_plugin_management_permission(request)
         try:
             p = enable_plugin(plugin_name)
             if p.requires_restart():
@@ -189,6 +205,7 @@ class PluginAdmin(admin.ModelAdmin):
         return HttpResponseRedirect(reverse('admin:app_plugin_changelist'))
 
     def plugin_disable(self, request, plugin_name, *args, **kwargs):
+        self.require_plugin_management_permission(request)
         try:
             p = disable_plugin(plugin_name)
             if p.requires_restart():
@@ -201,6 +218,7 @@ class PluginAdmin(admin.ModelAdmin):
         return HttpResponseRedirect(reverse('admin:app_plugin_changelist'))
 
     def plugin_delete(self, request, plugin_name, *args, **kwargs):
+        self.require_plugin_management_permission(request)
         try:
             delete_plugin(plugin_name)
         except Exception as e:
@@ -210,6 +228,7 @@ class PluginAdmin(admin.ModelAdmin):
         return HttpResponseRedirect(reverse('admin:app_plugin_changelist'))
 
     def plugin_upload(self, request, *args, **kwargs):
+        self.require_plugin_management_permission(request)
         file = request.FILES.get('file')
         if file is not None:
             # Save to tmp dir
