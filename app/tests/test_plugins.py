@@ -2,8 +2,9 @@ import os
 import shutil
 
 import sys
+from unittest.mock import patch
 
-from django.contrib.auth.models import User
+from django.contrib.auth.models import Permission, User
 from django.test import Client
 from rest_framework import status
 
@@ -24,6 +25,48 @@ class TestPlugins(BootTestCase):
 
     def tearDown(self):
         pass
+
+    def test_staff_cannot_manage_plugins(self):
+        staff = User.objects.get(username='testuser')
+        staff.is_staff = True
+        staff.save()
+        # Model permissions must not grant authority to deploy Python code.
+        staff.user_permissions.add(*Permission.objects.filter(
+            content_type__app_label='app', content_type__model='plugin'))
+        client = Client()
+        client.force_login(staff)
+
+        with patch('app.admin.enable_plugin') as enable, \
+                patch('app.admin.disable_plugin') as disable, \
+                patch('app.admin.delete_plugin') as delete, \
+                patch('app.admin.init_plugins') as initialize, \
+                patch('app.admin.tempfile.mktemp') as temporary_file:
+            for action in ('enable', 'disable', 'delete'):
+                response = client.get('/admin/app/plugin/test/{}/'.format(action))
+                self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+            with open('app/fixtures/testabc_plugin.zip', 'rb') as archive:
+                response = client.post('/admin/app/plugin/actions/upload/', {'file': archive})
+            self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+            self.assertEqual(client.get('/admin/app/plugin/').status_code,
+                             status.HTTP_403_FORBIDDEN)
+            self.assertEqual(client.post('/admin/app/plugin/test/change/',
+                                         {'enabled': True}).status_code,
+                             status.HTTP_403_FORBIDDEN)
+            for operation in (enable, disable, delete, initialize, temporary_file):
+                operation.assert_not_called()
+
+        response = client.get('/admin/')
+        self.assertNotContains(response, '/admin/app/plugin/')
+
+    def test_superuser_can_manage_plugin_lifecycle(self):
+        client = Client()
+        client.force_login(User.objects.get(username='testsuperuser'))
+        for action in ('enable', 'disable', 'delete'):
+            with patch('app.admin.{}_plugin'.format(action)) as operation:
+                operation.return_value.requires_restart.return_value = False
+                response = client.get('/admin/app/plugin/test/{}/'.format(action))
+                self.assertEqual(response.status_code, status.HTTP_302_FOUND)
+                operation.assert_called_once_with('test')
 
     def test_core_plugins(self):
         client = Client()
@@ -362,4 +405,3 @@ class TestPlugins(BootTestCase):
         plugin_file.close()
         missing_manifest_plugin_file.close()
         bad_dir_plugin_file.close()
-
