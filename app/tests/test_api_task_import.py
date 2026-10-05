@@ -9,6 +9,8 @@ from django.contrib.auth.models import User
 from guardian.shortcuts import remove_perm, assign_perm
 from rest_framework import status
 from rest_framework.test import APIClient
+from unittest.mock import Mock, patch
+from pyodm.exceptions import NodeServerError
 
 import worker
 from app.cogeo import valid_cogeo
@@ -25,6 +27,48 @@ class TestApiTask(BootTransactionTestCase):
     def setUp(self):
         super().setUp()
         clear_test_media_root()
+
+    def test_private_url_rejected_before_task_creation(self):
+        client = APIClient()
+        client.login(username='testuser', password='test1234')
+        user = User.objects.get(username='testuser')
+        project = Project.objects.create(owner=user, name='Import network policy')
+        task_count = Task.objects.count()
+        with patch('app.task_import_url.socket.getaddrinfo',
+                   return_value=[(0, 0, 0, '', ('10.0.0.83', 80))]), \
+                patch('app.api.tasks.worker_tasks.process_task.delay') as enqueue:
+            response = client.post('/api/projects/{}/tasks/import'.format(project.pk),
+                                   {'url': 'http://internal.example/all.zip'})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(Task.objects.count(), task_count)
+        enqueue.assert_not_called()
+
+    def test_remote_import_failure_does_not_publish_response(self):
+        user = User.objects.get(username='testuser')
+        project = Project.objects.create(owner=user, name='Failed remote import')
+        task = Task.objects.create(project=project, name='Import',
+                                   import_url='https://archive.example/all.zip')
+        task.create_task_directories()
+        response = Mock(status=200, headers={})
+        response.stream.return_value = [b'internal-service-secret']
+        with patch('app.task_import_url.socket.getaddrinfo',
+                   return_value=[(0, 0, 0, '', ('93.184.216.34', 443))]), \
+                patch('app.task_import_url._open_archive_response', return_value=(response, Mock())):
+            with self.assertRaises(NodeServerError):
+                task.handle_import()
+        self.assertFalse(os.path.exists(task.assets_path('all.zip')))
+        self.assertFalse(any(name.startswith('task-import-') for name in os.listdir(settings.MEDIA_TMP)))
+
+    def test_corrupt_archive_removed_after_failed_extraction(self):
+        user = User.objects.get(username='testuser')
+        project = Project.objects.create(owner=user, name='Invalid archive')
+        task = Task.objects.create(project=project, name='Import')
+        task.create_task_directories()
+        with open(task.assets_path('all.zip'), 'wb') as archive:
+            archive.write(b'invalid archive')
+        with self.assertRaises(NodeServerError):
+            task.handle_import()
+        self.assertFalse(os.path.exists(task.assets_path('all.zip')))
 
     def test_task(self):
         client = APIClient()
@@ -149,6 +193,16 @@ class TestApiTask(BootTransactionTestCase):
                 'url': "javascript:void(0)"
             })
             self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
+            # Exempt only this test's loopback fixture server from network policy.
+            # Production loopback requests remain blocked even for trusted origins.
+            import app.task_import_url as import_urls
+            real_address_allowed = import_urls._address_allowed
+            allowed = patch('app.task_import_url._address_allowed',
+                            side_effect=lambda address, trusted: address in ('127.0.0.1', '::1') or
+                            real_address_allowed(address, trusted))
+            allowed.start()
+            self.addCleanup(allowed.stop)
 
             # Import with URL method
             assets_import_url = "http://{}:{}/task/{}/download/all.zip".format(pnode.hostname, pnode.port, task_uuid)

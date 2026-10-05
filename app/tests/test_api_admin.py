@@ -1,12 +1,13 @@
 import time
-from django.contrib.auth.models import User, Group
+from django.contrib.auth.models import Permission, User, Group
 from rest_framework import status
 from rest_framework.test import APIClient
 from rest_framework_jwt.settings import api_settings
 from django.contrib.auth.hashers import check_password
 
 from .classes import BootTestCase
-from app.api.admin import UserSerializer, GroupSerializer
+from app.api.admin import IsActiveSuperuser, UserSerializer, GroupSerializer
+from types import SimpleNamespace
 
 
 class TestApi(BootTestCase):
@@ -15,6 +16,77 @@ class TestApi(BootTestCase):
 
     def tearDown(self):
         pass
+
+    def test_staff_cannot_manage_users_or_groups(self):
+        staff = User.objects.get(username='testuser')
+        staff.is_staff = True
+        staff.save()
+        staff.user_permissions.add(*Permission.objects.filter(
+            content_type__app_label='auth', content_type__model__in=['user', 'group']))
+        client = APIClient()
+        client.force_authenticate(user=staff)
+        group = Group.objects.create(name='Protected')
+
+        for resource, object_id in (('users', staff.pk), ('groups', group.pk)):
+            url = '/api/admin/{}/'.format(resource)
+            detail = '{}{}/'.format(url, object_id)
+            for response in (client.get(url), client.get(detail),
+                             client.post(url, {'username': 'elevated', 'name': 'elevated',
+                                               'is_superuser': True}, format='json'),
+                             client.patch(detail, {'is_superuser': True, 'permissions': []},
+                                          format='json'),
+                             client.put(detail, {'username': 'elevated', 'name': 'elevated',
+                                                 'is_superuser': True}, format='json'),
+                             client.delete(detail)):
+                self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        staff.refresh_from_db()
+        self.assertFalse(staff.is_superuser)
+        self.assertTrue(Group.objects.filter(pk=group.pk).exists())
+        self.assertFalse(User.objects.filter(username='elevated').exists())
+
+    def test_inactive_superuser_permission_is_denied(self):
+        user = User.objects.get(username='testsuperuser')
+        user.is_active = False
+        self.assertFalse(IsActiveSuperuser().has_permission(SimpleNamespace(user=user), None))
+
+    def test_superuser_password_updates_and_privileges(self):
+        client = APIClient()
+        client.force_authenticate(user=User.objects.get(username='testsuperuser'))
+        response = client.post('/api/admin/users/', {
+            'username': 'managed-user', 'password': 'initial-secret',
+            'is_staff': True, 'is_superuser': True,
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertNotIn('password', response.data)
+        user = User.objects.get(username='managed-user')
+        self.assertTrue(user.check_password('initial-secret'))
+        self.assertTrue(user.is_superuser)
+        detail = '/api/admin/users/{}/'.format(user.pk)
+        response = client.patch(detail, {'password': 'replacement-secret'}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertNotIn('password', response.data)
+        user.refresh_from_db()
+        self.assertTrue(user.check_password('replacement-secret'))
+        stored_password = user.password
+        response = client.patch(detail, {'first_name': 'Updated'}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        user.refresh_from_db()
+        self.assertEqual(user.password, stored_password)
+        response = client.patch(detail, {'password': ''}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        user.refresh_from_db()
+        self.assertEqual(user.password, stored_password)
+        response = client.get('/api/admin/users/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        for result in response.data['results']:
+            self.assertNotIn('password', result)
+
+    def test_user_without_password_cannot_log_in(self):
+        serializer = UserSerializer(data={'username': 'passwordless-user'})
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        user = serializer.save()
+        self.assertFalse(user.has_usable_password())
+        self.assertNotIn('password', serializer.data)
 
     def test_user(self):
         ##
@@ -47,7 +119,7 @@ class TestApi(BootTestCase):
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         self.assertEqual(res.data['username'], user.username)
         self.assertEqual(res.data['email'], user.email)
-        self.assertEqual(res.data['password'], user.password)
+        self.assertNotIn('password', res.data)
         self.assertTrue(check_password('test999', user.password))
 
         # Can update user
@@ -58,7 +130,9 @@ class TestApi(BootTestCase):
         res = client.get('/api/admin/users/{}/'.format(created_user_id)) # ReGet user
         self.assertEqual(res.data['username'], user.username)
         self.assertEqual(res.data['email'], user.email)
-        self.assertEqual(res.data['password'], user.password)
+        self.assertNotIn('password', res.data)
+
+        self.assertTrue(check_password('test888', user.password))
 
         # Can find user by email
         res = client.get('/api/admin/users/?email=testuser888@test.com')

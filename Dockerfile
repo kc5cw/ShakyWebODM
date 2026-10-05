@@ -66,7 +66,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 EOT
 
 # Modify PATH to prioritize venv, effectively activating venv
-ENV PATH="$WORKDIR/venv/bin:$PATH"
+ENV PATH="$WORKDIR/venv/bin:$WORKDIR/node_modules/.bin:$PATH"
 
 RUN --mount=type=cache,target=/root/.cache/pip \
     <<EOT
@@ -76,6 +76,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip install numpy==1.26.2
     # Install Python requirements, including correct Python GDAL bindings.
     pip install -r requirements.txt "boto3==1.14.14" gdal[numpy]=="$(gdal-config --version).*" --no-build-isolation
+    pip check
 EOT
 
 # Install project Node dependencies
@@ -83,9 +84,6 @@ COPY package.json ./
 RUN --mount=type=cache,target=/root/.npm \
     <<EOT
     npm install --quiet
-    # Install webpack, webpack CLI
-    npm install --quiet -g webpack@5.89.0
-    npm install --quiet -g webpack-cli@5.1.4
 EOT
 
 # Copy remaining files
@@ -119,7 +117,7 @@ EOT
 FROM common AS app
 
 # Modify PATH to prioritize venv, effectively activating venv
-ENV PATH="$WORKDIR/venv/bin:$PATH"
+ENV PATH="$WORKDIR/venv/bin:$WORKDIR/node_modules/.bin:$PATH"
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
@@ -142,9 +140,6 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get install -y --no-install-recommends \
         python$PYTHON_VERSION python$PYTHON_VERSION-distutils gdal-bin pdal \
         nginx certbot logrotate gettext-base cron postgresql-client gettext tzdata git exiftool
-    # Install webpack, webpack CLI
-    npm install --quiet -g webpack@5.89.0
-    npm install --quiet -g webpack-cli@5.1.4
     # Cleanup of build requirements
     apt-get autoremove -y
     apt-get clean
