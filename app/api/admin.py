@@ -2,20 +2,41 @@ from django.contrib.auth.models import User, Group
 from app.models import Profile
 from rest_framework import serializers, viewsets, generics, status, exceptions
 from rest_framework.decorators import action
-from rest_framework.permissions import IsAdminUser
+from rest_framework.permissions import BasePermission, IsAdminUser
 from rest_framework.response import Response
 from django.core.exceptions import ObjectDoesNotExist
 from django.contrib.auth.hashers import make_password
 from app import models
 
+class IsActiveSuperuser(BasePermission):
+    def has_permission(self, request, view):
+        user = request.user
+        return bool(user and user.is_authenticated and user.is_active and user.is_superuser)
+
+
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
-        model  = User
-        fields = '__all__' 
+        model = User
+        fields = ('id', 'username', 'password', 'first_name', 'last_name', 'email',
+                  'is_active', 'is_staff', 'is_superuser', 'groups',
+                  'user_permissions', 'last_login', 'date_joined')
+        read_only_fields = ('id', 'last_login', 'date_joined')
+        extra_kwargs = {'password': {'write_only': True, 'required': False,
+                                     'allow_blank': False}}
+
+    def create(self, validated_data):
+        validated_data['password'] = make_password(validated_data.get('password'))
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        if 'password' in validated_data:
+            validated_data['password'] = make_password(validated_data['password'])
+        return super().update(instance, validated_data)
+
 
 class AdminUserViewSet(viewsets.ModelViewSet):
     serializer_class = UserSerializer
-    permission_classes = [IsAdminUser]
+    permission_classes = [IsActiveSuperuser]
 
     def get_queryset(self):
         queryset = User.objects.all()
@@ -24,23 +45,14 @@ class AdminUserViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(email=email)
         return queryset
 
-    def create(self, request):
-        data = request.data.copy()
-        password = data.get('password')
-        data['password'] = make_password(password)
-        user = UserSerializer(data=data)
-        user.is_valid(raise_exception=True)
-        user.save()
-        return Response(user.data, status=status.HTTP_201_CREATED)
-
 class GroupSerializer(serializers.ModelSerializer):
     class Meta:
         model  = Group
-        fields = '__all__'
+        fields = ('id', 'name', 'permissions')
 
 class AdminGroupViewSet(viewsets.ModelViewSet):
     serializer_class = GroupSerializer
-    permission_classes = [IsAdminUser]
+    permission_classes = [IsActiveSuperuser]
 
     def get_queryset(self):
         queryset = Group.objects.all()
