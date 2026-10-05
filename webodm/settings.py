@@ -356,6 +356,13 @@ NODE_OFFLINE_MINUTES = 5
 # and assumes that all nodes are always online, avoiding polling
 NODE_OPTIMISTIC_MODE = False
 
+# Explicit origins permitted to download archives from private LAN addresses.
+# Loopback, link-local/metadata, and reserved destinations remain blocked.
+TASK_IMPORT_TRUSTED_ORIGINS = [
+    origin.strip() for origin in os.environ.get('WO_TASK_IMPORT_TRUSTED_ORIGINS', '').split(',')
+    if origin.strip()
+]
+
 # URL to external auth endpoint
 EXTERNAL_AUTH_ENDPOINT = ''
 

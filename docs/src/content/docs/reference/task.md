@@ -248,3 +248,33 @@ RUNNING | 20 | [Task](/reference/task/) is currently being processed.
 FAILED | 30 | [Task](/reference/task/) has failed for some reason (not enough images, out of memory, Piero forgot to close a parenthesis, etc.)
 COMPLETED | 40 | [Task](/reference/task/) has completed. Assets are be ready to be downloaded.
 CANCELED | 50 | [Task](/reference/task/) was manually canceled by the user.
+
+### Remote archive import network policy
+
+Archive URL imports accept HTTP and HTTPS destinations that resolve entirely to
+public addresses. Every redirect is validated separately. The worker connects to
+a validated IP without resolving the hostname again, while retaining the original
+hostname for HTTPS certificate verification. Environment proxy settings are not
+used for these downloads.
+
+For an intentional private LAN archive service, configure exact origins in
+`webodm/local_settings.py`:
+
+```python
+TASK_IMPORT_TRUSTED_ORIGINS = ['https://nas.example:8443']
+```
+
+Alternatively set the comma-separated `WO_TASK_IMPORT_TRUSTED_ORIGINS` environment
+variable in both the web application and worker. Entries include the scheme and
+optional port, without paths, queries, credentials, or wildcards. Trusting one
+origin does not trust its redirects to other private hosts. Only RFC1918 IPv4 or
+IPv6 unique-local addresses are permitted by this exception; loopback, link-local
+metadata services, reserved addresses, and IPv6 transition ranges remain blocked.
+An allowed origin authorizes downloads from every path on that origin, so it must
+be a service whose responses project editors are permitted to read.
+
+Responses are streamed to temporary storage outside task assets and parsed as ZIP
+archives before publication. Failed or canceled downloads are removed. This does
+not introduce download-size, expanded-archive-size, or decompression quotas.
+Local file uploads and the existing mounted `imports` directory path retain their
+current behavior.

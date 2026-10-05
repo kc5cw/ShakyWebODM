@@ -34,6 +34,7 @@ from worker import tasks as worker_tasks
 from .common import get_and_check_project, get_asset_download_filename, check_project_perms
 from .tags import TagsField
 from app.security import path_traversal_check
+from app.task_import_url import resolve_archive_url, TaskImportError
 from django.utils.translation import gettext_lazy as _
 from .fields import PolygonGeometryField
 from app.geoutils import geom_transform_wkt_bbox, get_srs_name_units_from_epsg_or_wkt
@@ -699,8 +700,10 @@ class TaskAssetsImport(APIView):
         if import_url:
             if len(files) > 0:
                 raise exceptions.ValidationError(detail=_("Cannot create task, either specify a URL or upload 1 file."))
-            if re.match(r"^https?:\/\/.+$", import_url.lower()) is None:
-                raise exceptions.ValidationError(detail=_("Invalid URL. Did you mean %(hint)s ?") % { 'hint': f'http://{import_url}'})
+            try:
+                resolve_archive_url(import_url, settings.TASK_IMPORT_TRUSTED_ORIGINS)
+            except TaskImportError as e:
+                raise exceptions.ValidationError(detail=str(e))
 
         chunk_index = request.data.get('dzchunkindex')
         uuid = request.data.get('dzuuid') 
