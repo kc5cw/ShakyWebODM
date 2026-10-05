@@ -3,6 +3,23 @@ title: Task
 template: doc
 ---
 
+### Task asset content safety
+
+Task assets are untrusted data, including files extracted from imported archives.
+Raw asset URLs and download aliases use the actual file extension to select a
+fixed content type; a custom `filename` or `inline=1` cannot change this policy.
+Raster image previews, JSON/GeoJSON, and plain-text model/data files can display
+inline. HTML, SVG, XML, JavaScript, CSS, PDF, and unknown formats are served as
+`application/octet-stream` attachments. Generated ZIP streams are always ZIP
+attachments.
+
+Asset responses include `X-Content-Type-Options: nosniff` and a restrictive sandbox
+content security policy. Viewer XHR/fetch requests still receive their file bytes,
+including Potree's JSON metadata stored as `cloud.js`; the filename no longer
+makes that response executable as JavaScript. Authentication and project access
+checks are unchanged. Existing imported assets receive this policy when served,
+without rewriting their content or a database migration.
+
 > Example task:
 
 ```json
