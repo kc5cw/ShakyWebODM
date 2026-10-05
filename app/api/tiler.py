@@ -34,6 +34,8 @@ import warnings
 from functools import lru_cache
 from osgeo import osr
 
+MAX_TILE_DIMENSION = 1024
+
 # Disable: NotGeoreferencedWarning: Dataset has no geotransform, gcps, or rpcs. The identity matrix be returned.
 warnings.filterwarnings("ignore", category=NotGeoreferencedWarning)
 
@@ -335,12 +337,17 @@ class Tiles(TaskNestedView):
         Get a tile image
         """
         task = self.get_and_check_task(request, pk)
-        
+
+        # Check the token before int conversion: huge decimal scale strings must
+        # neither consume conversion work nor reach a raster allocation.
+        if not ((type(scale) is int and scale in (1, 2)) or
+                (isinstance(scale, str) and scale in ('1', '2'))):
+            raise exceptions.ValidationError(_("Tile scale must be 1 or 2"))
+        scale = int(scale)
+
         z = int(z)
         x = int(x)
         y = int(y)
-
-        scale = int(scale)
 
         indexes = None
         nodata = None
@@ -404,6 +411,8 @@ class Tiles(TaskNestedView):
         if nodata is not None:
             nodata = np.nan if nodata == "nan" else float(nodata)
         tilesize = scale * tilesize
+        if tilesize > MAX_TILE_DIMENSION:
+            raise exceptions.ValidationError(_("Tile dimensions exceed the limit"))
         url = get_raster_path(task, tile_type)
         if not os.path.isfile(url):
             raise exceptions.NotFound()
