@@ -32,7 +32,6 @@ from django.db import models
 from django.db import transaction
 from django.db import connection
 from django.utils import timezone
-from urllib3.exceptions import ReadTimeoutError
 
 from app import pending_actions
 from django.contrib.gis.db.models.fields import GeometryField
@@ -41,6 +40,7 @@ from app.cogeo import assure_cogeo
 from app.pointcloud_utils import is_pointcloud_georeferenced
 from app.testwatch import testWatch
 from app.security import path_traversal_check
+from app.task_import_url import download_archive, TaskImportError
 from app.geoutils import geom_transform, epsg_from_wkt, get_raster_bounds_wkt, get_srs_name_units_from_epsg_or_wkt
 from nodeodm import status_codes
 from nodeodm.models import ProcessingNode
@@ -616,40 +616,34 @@ class Task(models.Model):
                     raise NodeServerError(e)
             else:
                 try:
-                    # TODO: this is potentially vulnerable to a zip bomb attack
-                    #       mitigated by the fact that a valid account is needed to
-                    #       import tasks
-                    logger.info("Importing task assets from {} for {}".format(self.import_url, self))
-                    download_stream = requests.get(self.import_url, stream=True, timeout=10)
-                    content_length = download_stream.headers.get('content-length')
-                    total_length = int(content_length) if content_length is not None else None
-                    downloaded = 0
                     last_update = 0
 
-                    with open(zip_path, 'wb') as fd:
-                        for chunk in download_stream.iter_content(4096):
-                            downloaded += len(chunk)
+                    def update_progress(downloaded, total_length):
+                        nonlocal last_update
+                        if time.time() - last_update >= 2:
+                            if total_length is not None:
+                                Task.objects.filter(pk=self.id).update(
+                                    running_progress=(float(downloaded) / total_length) * 0.9)
+                            self.check_if_canceled()
+                            last_update = time.time()
 
-                            if time.time() - last_update >= 2:
-                                # Update progress
-                                if total_length is not None:
-                                    Task.objects.filter(pk=self.id).update(running_progress=(float(downloaded) / total_length) * 0.9)
-
-                                self.check_if_canceled()
-                                last_update = time.time()
-
-                            fd.write(chunk)
-
-                except (requests.exceptions.Timeout, requests.exceptions.ConnectionError, ReadTimeoutError, requests.exceptions.MissingSchema) as e:
-                    raise NodeServerError(e)
+                    download_archive(self.import_url, zip_path, settings.MEDIA_TMP,
+                                     trusted_origins=settings.TASK_IMPORT_TRUSTED_ORIGINS,
+                                     progress=update_progress)
+                except TaskImportError as e:
+                    raise NodeServerError(str(e))
 
         self.refresh_from_db()
 
         try:
             self.extract_assets_and_complete()
         except (zipfile.BadZipFile, FileNotFoundError):
+            if os.path.exists(zip_path):
+                os.remove(zip_path)
             raise NodeServerError(gettext("Invalid zip file"))
         except NotImplementedError:
+            if os.path.exists(zip_path):
+                os.remove(zip_path)
             raise NodeServerError(gettext("Unsupported compression method"))
         
         images_json = self.assets_path("images.json")
