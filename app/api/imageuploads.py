@@ -4,27 +4,11 @@ import math
 
 from .tasks import TaskNestedView
 from rest_framework import exceptions
-from app.models.task import assets_directory_path
-from PIL import Image, ImageDraw, ImageOps
+from PIL import Image
 from django.http import HttpResponse
 from .tasks import download_file_response
 from .common import hex2rgb
-import numpy as np
-
-def normalize(img):
-    """
-    Linear normalization
-    http://en.wikipedia.org/wiki/Normalization_%28image_processing%29
-    """
-    arr = np.array(img).astype('float')
-
-    minval = arr.min()
-    maxval = arr.max()
-    if minval != maxval:
-        arr -= minval
-        arr *= (255.0/(maxval-minval))
-
-    return Image.fromarray(arr)
+from app.image_preview import MAX_THUMBNAIL_SIZE, render_preview
 
 class Thumbnail(TaskNestedView):
     def get(self, request, pk=None, project_pk=None, image_filename=""):
@@ -38,7 +22,7 @@ class Thumbnail(TaskNestedView):
 
         try:
             thumb_size = int(self.request.query_params.get('size', 512))
-            if thumb_size < 1:
+            if not 1 <= thumb_size <= MAX_THUMBNAIL_SIZE:
                 raise ValueError()
 
             quality = int(self.request.query_params.get('quality', 75))
@@ -47,7 +31,7 @@ class Thumbnail(TaskNestedView):
                 
             center_x = float(self.request.query_params.get('center_x', '0.5'))
             center_y = float(self.request.query_params.get('center_y', '0.5'))
-            if center_x < -0.5 or center_x > 1.5 or center_y < -0.5 or center_y > 1.5:
+            if not (-0.5 <= center_x <= 1.5 and -0.5 <= center_y <= 1.5):
                 raise ValueError()
 
             draw_points = self.request.query_params.getlist('draw_point')
@@ -58,7 +42,7 @@ class Thumbnail(TaskNestedView):
             i = 0
             for p in draw_points:
                 coords = list(map(float, p.split(",")))
-                if len(coords) != 2:
+                if len(coords) != 2 or not all(math.isfinite(c) and -1 <= c <= 2 for c in coords):
                     raise ValueError()
 
                 points.append({
@@ -68,71 +52,32 @@ class Thumbnail(TaskNestedView):
                     'radius': float(point_radiuses[i]) if i < len(point_radiuses) else 1.0,
                 })
 
+                if not 0 <= points[-1]['radius'] <= 100:
+                    raise ValueError()
                 i += 1
             
             zoom = float(self.request.query_params.get('zoom', '1'))
-            if zoom < 0.1 or zoom > 10:
+            if not 0.1 <= zoom <= 10:
                 raise ValueError()
 
         except ValueError:
             raise exceptions.ValidationError("Invalid query parameters")
 
-        with Image.open(image_path) as img:
-            if img.mode != 'RGB':
-                img = normalize(img)
-                img = img.convert('RGB')
-            w, h = img.size
-            thumb_size = min(max(w, h), thumb_size)
-            
-            # Move image center
-            if center_x != 0.5 or center_y != 0.5:
-                img = img.crop((
-                        w * (center_x - 0.5),
-                        h * (center_y - 0.5),
-                        w * (center_x + 0.5),
-                        h * (center_y + 0.5)
-                    ))
-            
-            # Scale
-            scale_factor = 1
-            off_x = 0
-            off_y = 0
+        try:
+            with Image.open(image_path) as source:
+                img = render_preview(source, thumb_size, center_x, center_y, zoom, points)
+        except (ValueError, Image.DecompressionBombError):
+            raise exceptions.ValidationError("Image exceeds preview limits")
 
-            if zoom != 1:
-                scale_factor = (2 ** (zoom - 1))
-                off_x = w / 2.0 - w / scale_factor / 2.0
-                off_y = h / 2.0 - h / scale_factor / 2.0
-                win = img.crop((off_x, off_y, 
-                                off_x + (w / scale_factor),
-                                off_y + (h / scale_factor)
-                    ))
-                img = ImageOps.scale(win, scale_factor, Image.NEAREST)
+        output = io.BytesIO()
+        img.save(output, format='JPEG', quality=quality, progressive=True)
 
-            sw, sh = w * scale_factor, h * scale_factor
+        res = HttpResponse(content_type="image/jpeg")
+        res['Content-Disposition'] = 'inline'
+        res.write(output.getvalue())
+        output.close()
 
-            # Draw points
-            for p in points:
-                d = ImageDraw.Draw(img)
-                r = p['radius'] * max(w, h) / 100.0
-                
-                sx = (p['x'] + (0.5 - center_x)) * sw
-                sy = (p['y'] + (0.5 - center_y)) * sh
-                x = sx - off_x * scale_factor
-                y = sy - off_y * scale_factor
-
-                d.ellipse([(x - r, y - r), 
-                           (x + r, y + r)], outline=p['color'], width=int(max(1.0, math.floor(r / 3.0))))
-            
-            img.thumbnail((thumb_size, thumb_size))
-            output = io.BytesIO()
-            img.save(output, format='JPEG', quality=quality, progressive=True)
-
-            res = HttpResponse(content_type="image/jpeg")
-            res['Content-Disposition'] = 'inline'
-            res.write(output.getvalue())
-            output.close()
-
-            return res
+        return res
 
 class ImageDownload(TaskNestedView):
     def get(self, request, pk=None, project_pk=None, image_filename=""):
