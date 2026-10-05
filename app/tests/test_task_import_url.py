@@ -125,7 +125,6 @@ class TestTaskImportURL(unittest.TestCase):
         result, pool = response(body=body, headers={'Content-Length': str(len(body))}), Mock()
         with tempfile.TemporaryDirectory() as directory:
             temp_dir = os.path.join(directory, 'temporary')
-            os.mkdir(temp_dir)
             destination = os.path.join(directory, 'all.zip')
             def progress(downloaded, total):
                 self.assertFalse(os.path.exists(destination))

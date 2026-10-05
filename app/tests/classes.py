@@ -1,6 +1,7 @@
 import os
 
 from django import db
+from django.core.cache import cache
 from django.contrib.auth.models import User
 from django.test import TestCase
 from django.test import TransactionTestCase
@@ -42,6 +43,8 @@ def setupProjects():
 
 
 def cleanup():
+    # Database fixtures reset user IDs; cached quotas and deadlines must reset too.
+    cache.clear()
     if settings.TESTING and \
             os.path.exists(settings.MEDIA_ROOT) and \
                     "_test" in settings.MEDIA_ROOT[-6:]:

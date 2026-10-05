@@ -118,9 +118,11 @@
                         <li>
                             <a href="{% url 'admin:app_theme_change' SETTINGS.theme.id %}"><i class="fa fa-paint-brush fa-fw"></i> {% trans 'Theme' %}</a>
                         </li>
+                        {% if user.is_superuser %}
                         <li>
                             <a href="/admin/app/plugin/"><i class="fa fa-plug fa-fw"></i> {% trans 'Plugins' %}</a>
                         </li>
+                        {% endif %}
                         <li>
                             <a href="/admin/app/"><i class="fa fa-cog fa-fw"></i> {% trans 'Application' %}</a>
                         </li>

@@ -1,3 +1,4 @@
+import io
 import unittest
 from unittest.mock import Mock, patch
 
@@ -8,6 +9,19 @@ from app.image_preview import render_preview
 
 
 class ImagePreviewLimitsTest(unittest.TestCase):
+    def test_jpeg_decoder_reduction_preserves_original_and_preview_geometry(self):
+        output = io.BytesIO()
+        Image.new('RGB', (4096, 3072), (20, 100, 200)).save(output, format='JPEG')
+        original = output.getvalue()
+        with Image.open(io.BytesIO(original)) as source:
+            result = render_preview(source, 512)
+            self.assertLess(source.width, 4096)
+            self.assertEqual(result.size, (512, 384))
+            self.assertLess(abs(result.getpixel((256, 192))[2] - 200), 3)
+        with Image.open(io.BytesIO(original)) as source:
+            self.assertEqual(source.size, (4096, 3072))
+            self.assertEqual(render_preview(source, 512, zoom=10).size, (512, 384))
+
     def test_oversized_header_rejected_before_decode(self):
         source = Mock(size=(10001, 10000))
         with self.assertRaises(ValueError):

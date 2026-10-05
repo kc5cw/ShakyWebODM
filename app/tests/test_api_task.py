@@ -461,11 +461,16 @@ class TestApiTask(BootTransactionTestCase):
             self.assertTrue(res.status_code == status.HTTP_200_OK)
             self.assertTrue(res.has_header('_stream'))
 
-            # We can inline downloads
-            res = client.get("/api/projects/{}/tasks/{}/download/{}?inline=1".format(project.id, task.id, list(task.ASSETS_MAP.keys())[0]))
+            # Safe raster downloads can be inline, while archives stay attachments.
+            res = client.get("/api/projects/{}/tasks/{}/download/orthophoto.tif?inline=1".format(project.id, task.id))
             self.assertTrue(res.status_code == status.HTTP_200_OK)
             self.assertTrue(res.has_header('Content-Disposition'))
             self.assertTrue('inline' in res.get('Content-Disposition'))
+
+            res = client.get("/api/projects/{}/tasks/{}/download/all.zip?inline=1".format(project.id, task.id))
+            self.assertEqual(res.status_code, status.HTTP_200_OK)
+            self.assertIn('attachment', res.get('Content-Disposition'))
+            self.assertEqual(res.get('Content-Type'), 'application/zip')
 
             # The tif files are valid Cloud Optimized GeoTIFF
             self.assertTrue(valid_cogeo(task.assets_path(task.ASSETS_MAP["orthophoto.tif"])))
@@ -531,6 +536,12 @@ class TestApiTask(BootTransactionTestCase):
 
             res = client.get("/api/projects/{}/tasks/{}/images/thumbnail/tiny_drone_image.jpg?size=9999999".format(project.id, task.id))
             self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
+            for query in ('size=2049', 'size=0', 'center_x=nan', 'center_y=inf',
+                          'zoom=nan', 'zoom=inf', 'draw_point=nan,0',
+                          'draw_point=0,0&point_radius=inf'):
+                res = client.get("/api/projects/{}/tasks/{}/images/thumbnail/tiny_drone_image.jpg?{}".format(project.id, task.id, query))
+                self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST, query)
 
             # Can plot points, recenter thumbnails, zoom
             res = client.get("/api/projects/{}/tasks/{}/images/thumbnail/tiny_drone_image.jpg?size=2048&center_x=0.3&center_y=0.2&draw_point=0.4,0.4&point_color=ff0000&point_radius=3&zoom=2".format(project.id, task.id))
@@ -1634,4 +1645,3 @@ class TestApiTask(BootTransactionTestCase):
         # Cannot filter with invalid bounding box format
         res = client.get("/api/projects/{}/tasks/?bbox=bad".format(project.id))
         self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
-

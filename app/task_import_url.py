@@ -166,6 +166,7 @@ def download_archive(url, destination, temp_dir, trusted_origins=(), progress=No
                     total = None
                 if total is not None and total <= 0:
                     total = None
+                os.makedirs(temp_dir, exist_ok=True)
                 fd, temporary_path = tempfile.mkstemp(prefix='task-import-', suffix='.zip', dir=temp_dir)
                 downloaded = 0
                 with os.fdopen(fd, 'wb') as output:

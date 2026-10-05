@@ -21,9 +21,15 @@ def start_processing_node(args = []):
     node_odm = subprocess.Popen(['node', 'index.js', '--port', '11223', '--test'] + args, shell=False,
                                 cwd=os.path.join(current_dir, "..", "..", "nodeodm", "external", "NodeODM"))
     time.sleep(3)  # Wait for the server to launch
-    yield node_odm
-    node_odm.terminate()
-    time.sleep(1)  # Wait for the server to stop
+    try:
+        yield node_odm
+    finally:
+        node_odm.terminate()
+        try:
+            node_odm.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            node_odm.kill()
+            node_odm.wait()
 
 @contextmanager
 def start_simple_auth_server(args = []):
@@ -31,9 +37,15 @@ def start_simple_auth_server(args = []):
     s = subprocess.Popen(['python', 'simple_auth_server.py'] + args, shell=False,
                                 cwd=os.path.join(current_dir, "scripts"))
     time.sleep(2)  # Wait for the server to launch
-    yield s
-    s.terminate()
-    time.sleep(1)  # Wait for the server to stop
+    try:
+        yield s
+    finally:
+        s.terminate()
+        try:
+            s.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            s.kill()
+            s.wait()
 
 # We need to clear previous media_root content
 # This points to the test directory, but just in case
@@ -54,4 +66,3 @@ def catch_signal(signal):
     signal.connect(handler, dispatch_uid=str(random.random()))
     yield handler
     signal.disconnect(handler)
-
