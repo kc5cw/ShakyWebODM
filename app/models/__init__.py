@@ -6,6 +6,7 @@ from .setting import Setting
 from .plugin_datum import PluginDatum
 from .plugin import Plugin
 from .profile import Profile
+from .external_identity import ExternalIdentity
 from .redirect import Redirect
 
 # deprecated

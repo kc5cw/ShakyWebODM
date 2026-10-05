@@ -28,7 +28,7 @@ class ExternalTokenAuth(APIView):
             if res.get('user_id') is not None:
                 user = get_user_from_external_auth_response(res)
                 if user is not None:
-                    login(request, user, backend='django.contrib.auth.backends.ModelBackend')
+                    login(request, user, backend='app.auth.backends.ExternalBackend')
                     return Response({'redirect': '/'})
                 elif cluster_mismatch(res) and settings.CLUSTER_URL != '':
                     return Response({'redirect': settings.CLUSTER_URL % res['cluster_id']})
