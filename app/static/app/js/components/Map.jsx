@@ -25,6 +25,7 @@ import CropButton from './CropButton';
 import update from 'immutability-helper';
 import ColorMaps from '../classes/ColorMaps';
 import Utils from '../classes/Utils';
+import createRasterPopup from '../classes/RasterPopup';
 import '../vendor/leaflet/Leaflet.Ajax';
 import 'rbush';
 import '../vendor/leaflet/leaflet-markers-canvas';
@@ -423,23 +424,14 @@ class Map extends React.Component {
               this.setZIndex(this.options.zIndex + 10000);
             };
 
-            var popup = L.DomUtil.create('div', 'infoWindow');
-
-            popup.innerHTML = `<div class="title">
-                                    ${name}
-                                </div>
-                                <div class="popup-opacity-slider">Opacity: <input id="layerOpacity" class="opacity" type="range" value="${layer.options.opacity}" min="0" max="1" step="0.01" /></div>
-                                <div>Bounds: [${layer.options.bounds.toBBoxString().split(",").join(", ")}]</div>
-                                <div class="popup-download-assets loading">
-                                  <i class="fa loading fa-spin fa-sync fa-spin fa-fw"></i>
-                                </div>
-
-                                <button
-                                    onclick="location.href='${this.tdPopupButtonUrl(meta.task)}';"
-                                    type="button"
-                                    class="switchModeButton btn btn-sm btn-secondary">
-                                    <i class="fa fa-cube"></i> 3D
-                                </button>`;
+            const popup = createRasterPopup({
+              name,
+              opacity: layer.options.opacity,
+              bounds: layer.options.bounds.toBBoxString().split(",").join(", "),
+              onSwitchMode: () => {
+                window.location.href = this.tdPopupButtonUrl(meta.task);
+              }
+            });
 
             layer.bindPopup(popup);
 
