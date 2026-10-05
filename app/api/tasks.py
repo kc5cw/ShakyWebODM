@@ -1,9 +1,7 @@
 import os
 import re
 import shutil
-from wsgiref.util import FileWrapper
 
-import mimetypes
 import rasterio
 from rasterio.vrt import WarpedVRT
 from rasterio.enums import ColorInterp
@@ -15,11 +13,8 @@ from shutil import copyfileobj, move
 from django.core.exceptions import ObjectDoesNotExist, SuspiciousFileOperation, ValidationError
 from django.core.files.uploadedfile import InMemoryUploadedFile
 from django.db import transaction
-from django.http import FileResponse
 from django.http import HttpResponse
-from django.http import StreamingHttpResponse
 from django.contrib.gis.geos import Polygon
-from zipstream.ng import ZipStream
 from rest_framework import status, serializers, viewsets, filters, exceptions, permissions, parsers
 from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny
@@ -35,6 +30,7 @@ from .common import get_and_check_project, get_asset_download_filename, check_pr
 from .tags import TagsField
 from app.security import path_traversal_check
 from app.task_import_url import resolve_archive_url, TaskImportError
+from app.task_asset_response import download_file_response, download_file_stream
 from django.utils.translation import gettext_lazy as _
 from .fields import PolygonGeometryField
 from app.geoutils import geom_transform_wkt_bbox, get_srs_name_units_from_epsg_or_wkt
@@ -447,50 +443,6 @@ class TaskNestedView(APIView):
             check_project_perms(request, task.project)
 
         return task
-
-
-def download_file_response(request, filePath, content_disposition, download_filename=None):
-    filename = os.path.basename(filePath)
-    if download_filename is None: 
-        download_filename = filename
-    filesize = os.stat(filePath).st_size
-    file = open(filePath, "rb")
-
-    # More than 100mb, normal http response, otherwise stream
-    # Django docs say to avoid streaming when possible
-    stream = filesize > 1e8 or request.GET.get('_force_stream', False)
-    if stream:
-        response = FileResponse(file)
-    else:
-        response = HttpResponse(FileWrapper(file),
-                                content_type=(mimetypes.guess_type(filename)[0] or "application/zip"))
-
-    response['Content-Type'] = mimetypes.guess_type(filename)[0] or "application/zip"
-    response['Content-Disposition'] = "{}; filename={}".format(content_disposition, download_filename)
-    response['Content-Length'] = filesize
-
-    # For testing
-    if stream:
-        response['_stream'] = 'yes'
-
-    return response
-
-
-def download_file_stream(request, stream, content_disposition, download_filename=None):
-    if not isinstance(stream, ZipStream):
-        # This should never happen, but just in case..
-        raise exceptions.ValidationError("stream not a zipstream instance")
-    
-    response = StreamingHttpResponse(stream, content_type=(mimetypes.guess_type(download_filename)[0] or "application/zip"))
-
-    response['Content-Type'] = mimetypes.guess_type(download_filename)[0] or "application/zip"
-    response['Content-Disposition'] = "{}; filename={}".format(content_disposition, download_filename)
-    response['Content-Length'] = len(stream)
-
-    # For testing
-    response['_stream'] = 'yes'
-    
-    return response
 
 
 """
